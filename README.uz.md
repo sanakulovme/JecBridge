@@ -18,7 +18,7 @@ Tamom. Papka yo'q bo'lsa o'zi yaratiladi, tunnel dasturi (cloudflared) birinchi 
 - **ChatGPT:** Settings → Apps & Connectors → *Developer mode* → *Create*
 - **Gemini:** Settings → Connected Apps → *Add a custom app*
 
-Keyin masalan shunday yozing: *"Shu loyihada HTML va CSS bilan kalkulyator yarat."*
+Keyin masalan shunday yozing: *"Shu loyihada HTML va CSS bilan kalkulyator yarat."* yoki *"Vite + React sayt yarat va ishga tushir."* AI dev server'ni o'zi ishga tushiradi va sizga `http://localhost:...` havolasini beradi.
 
 > [git](https://git-scm.com) ixtiyoriy, lekin tavsiya etiladi: u bilan har bir o'zgarishga avtomatik checkpoint olinadi va undo qilish mumkin bo'ladi. Git bo'lmasa ham qolgan hamma narsa ishlaydi.
 
@@ -120,6 +120,8 @@ Keyin AI'ga yozing: *"Shu papkada Next.js + Tailwind landing page qur, `npm run 
 | `edit_file` | Aniq matn bo'lagini almashtirish (butun faylni qayta yozmasdan) |
 | `delete_path`, `move_path` | O'chirish, ko'chirish, qayta nomlash |
 | `run_command` | `npm install`, `npm test`, `python main.py`… |
+| `start_process` | Dev server yoki watcher'ni fonda ishga tushirish (`npm run dev`) va uning URL'ini olish |
+| `process_output`, `stop_process` | Fon jarayonining loglarini ko'rish, to'xtatish |
 | `checkpoint`, `list_checkpoints` | Holatni saqlash va ko'rish |
 | `diff` | Checkpointdan beri nima o'zgargani |
 | `undo` | Checkpointga qaytish (undo'ning o'zi ham qaytariladi) |
@@ -152,7 +154,7 @@ DeepSeek, Ollama, OpenAI API kabi oddiy API'lar uchun MCP klientli agent kerak. 
 ## Sinov
 
 ```bash
-npm test     # 24 ta e2e sinov: noldan qurish, tahrir, undo, xavfsizlik, stdio, read-only, git'siz rejim
+npm test     # 28 ta e2e sinov: noldan qurish, tahrir, undo, xavfsizlik, dev server, stdio, read-only, git'siz rejim
 ```
 
 ## Litsenziya

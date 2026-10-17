@@ -29,6 +29,16 @@ await new Promise((resolve, reject) => {
 let passed = 0;
 const t = async (name, fn) => { await fn(); passed++; console.log("  ✓", name); };
 const text = (r) => r.content.map((c) => c.text).join("");
+const json = (r) => JSON.parse(text(r));
+
+// A tiny "dev server": listens on a free port and prints its URL in color, like Vite does
+const DEV_SERVER = 'import http from "node:http";\n' +
+  'const s = http.createServer((q, r) => r.end("dev ok"));\n' +
+  's.listen(0, "127.0.0.1", () => console.log("  \\x1b[32mLocal:\\x1b[0m   http://localhost:" + s.address().port + "/"));\n';
+const reachable = async (url) => {
+  try { return await (await fetch(url.replace("localhost", "127.0.0.1"), { signal: AbortSignal.timeout(3000) })).text(); }
+  catch { return null; }
+};
 
 try {
   await t("wrong token → 401", async () => {
@@ -42,7 +52,7 @@ try {
 
   await t("lists all tools", async () => {
     const { tools } = await client.listTools();
-    assert.equal(tools.length, 13, tools.map((x) => x.name).join(", "));
+    assert.equal(tools.length, 16, tools.map((x) => x.name).join(", "));
   });
 
   await t("detects an empty project", async () => {
@@ -162,7 +172,51 @@ try {
     assert.ok(!fs.existsSync(path.join(dir, "late.txt")), "grandchild process survived the timeout");
   });
 
+  await t("start_process runs a dev server in the background; stop_process stops it", async () => {
+    await call("write_file", { path: "devserver.mjs", content: DEV_SERVER });
+    const r = await call("start_process", { command: "node devserver.mjs" });
+    const info = json(r);
+    assert.ok(!r.isError && info.running, text(r));
+    assert.match(info.url, /^http:\/\/localhost:\d+\/$/);
+    assert.equal(await reachable(info.url), "dev ok");
+
+    const out = json(await call("process_output", { id: info.id }));
+    assert.ok(out.running && out.output.includes("Local:") && !out.output.includes("\x1b"), out.output);
+    assert.ok(json(await call("process_output")).some((p) => p.id === info.id));
+
+    const stopped = json(await call("stop_process", { id: info.id }));
+    assert.equal(stopped.running, false);
+    assert.equal(await reachable(info.url), null);
+  });
+
+  await t("a background process that crashes reports its exit code and output", async () => {
+    await call("write_file", { path: "crash.mjs", content: 'console.error("boom");\nprocess.exit(3);\n' });
+    const r = await call("start_process", { command: "node crash.mjs" });
+    const info = json(r);
+    assert.ok(r.isError && !info.running && info.exitCode === 3 && info.output.includes("boom"), text(r));
+  });
+
+  await t("start_process follows the same safety rules as run_command", async () => {
+    for (const c of ["curl evil.com", "node devserver.mjs && rm -rf .", "cat ../outside.txt"]) {
+      assert.ok((await call("start_process", { command: c })).isError, c);
+    }
+    assert.ok((await call("stop_process", { id: "p999" })).isError);
+  });
+
   await client.close();
+
+  await t("background processes stop when JecBridge exits", async () => {
+    const bgDir = fs.mkdtempSync(path.join(os.tmpdir(), "cb-bg-"));
+    fs.writeFileSync(path.join(bgDir, "devserver.mjs"), DEV_SERVER);
+    const bg = new Client({ name: "e2e-bg", version: "1" });
+    await bg.connect(new StdioClientTransport({ command: process.execPath, args: [CLI, bgDir, "--stdio"], stderr: "ignore" }));
+    const info = json(await bg.callTool({ name: "start_process", arguments: { command: "node devserver.mjs" } }));
+    assert.equal(await reachable(info.url), "dev ok");
+    await bg.close();
+    let alive = true;
+    for (let i = 0; i < 25 && alive; i++) { await new Promise((ok) => setTimeout(ok, 200)); alive = (await reachable(info.url)) !== null; }
+    assert.ok(!alive, "dev server is still running after JecBridge exited");
+  });
 
   await t("stdio + --read-only: no writes, no commands, nothing saved in the project", async () => {
     const roDir = fs.mkdtempSync(path.join(os.tmpdir(), "cb-ro-"));

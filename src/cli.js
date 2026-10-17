@@ -101,6 +101,8 @@ const log = (...a) => console.error(`[${new Date().toLocaleTimeString()}]`, ...a
 if (opts.stdio) {
   const server = createServer(ws, log);
   await server.connect(new StdioServerTransport());
+  // When the client goes away, exit so background processes are stopped too
+  process.stdin.on("close", () => process.exit(0));
   log(`JecBridge (stdio) is running: ${ws.root}`);
 } else {
   await startHttp();

@@ -25,6 +25,14 @@ const BLOCKED_GIT = ["push", "remote", "config", "credential"];
 // Children still running when the server exits are killed with it
 const running = new Set();
 process.on("exit", () => { for (const c of running) killTree(c); });
+// Ctrl+C / closing the window normally skips "exit" handlers; exit explicitly so children are cleaned up
+for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(sig, () => process.exit(0));
+
+const MAX_PROCESSES = 5;
+const PROCESS_LOG_MAX = 200_000;
+// Dev servers print where they listen, e.g. "Local: http://localhost:5173/"
+const LOCAL_URL = /https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]):\d+[^\s'"<>]*/;
+const stripAnsi = (s) => s.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "");
 
 function killTree(child) {
   if (!child.pid) return;
@@ -48,6 +56,9 @@ const DEFAULT_ALLOWED = [
 ];
 
 export class Workspace {
+  processes = new Map();
+  #nextProcessId = 0;
+
   constructor(root, opts = {}) {
     this.root = fs.realpathSync(path.resolve(root));
     this.allowAllCommands = !!opts.allowAllCommands;
@@ -234,7 +245,8 @@ export class Workspace {
     }
   }
 
-  run(command, { cwd = ".", timeoutSec = 120 } = {}) {
+  // Validates a command against the safe-mode rules and starts it; shared by run() and startProcess()
+  #spawn(command, cwd) {
     if (this.readOnly) throw new Error("Server is running in read-only mode");
     const { abs: cwdAbs } = this.resolve(cwd);
     const opts = { cwd: cwdAbs, env: this.#childEnv(), windowsHide: true, detached: process.platform !== "win32" };
@@ -261,6 +273,11 @@ export class Workspace {
       child = crossSpawn(bin, args, opts);
     }
     running.add(child);
+    return child;
+  }
+
+  run(command, { cwd = ".", timeoutSec = 120 } = {}) {
+    const child = this.#spawn(command, cwd);
     return new Promise((resolve) => {
       let out = ""; const cap = 60_000;
       const add = (d) => { if (out.length < cap) out += d.toString(); };
@@ -273,6 +290,60 @@ export class Workspace {
         done({ exitCode: code, output: out });
       });
     });
+  }
+
+  // ---------- background processes (dev servers, watchers) ----------
+  async startProcess(command, { cwd = ".", waitSec = 10 } = {}) {
+    const alive = [...this.processes.values()].filter((p) => p.exitCode === null);
+    if (alive.length >= MAX_PROCESSES) {
+      throw new Error(`Already ${MAX_PROCESSES} background processes running (${alive.map((p) => p.id).join(", ")}). Stop one with stop_process first.`);
+    }
+    const child = this.#spawn(command, cwd);
+    const proc = { id: `p${++this.#nextProcessId}`, command, cwd, child, startedAt: new Date().toISOString(), out: "", exitCode: null, url: null };
+    this.processes.set(proc.id, proc);
+    const add = (d) => {
+      proc.out += stripAnsi(d.toString());
+      if (proc.out.length > PROCESS_LOG_MAX) proc.out = proc.out.slice(-PROCESS_LOG_MAX / 2);
+      if (!proc.url) {
+        const m = proc.out.match(LOCAL_URL);
+        if (m) proc.url = m[0].replace("0.0.0.0", "localhost");
+      }
+    };
+    child.stdout.on("data", add); child.stderr.on("data", add);
+    child.on("error", (e) => { proc.out += `\n[failed to start: ${e.message}]`; proc.exitCode = -1; running.delete(child); });
+    child.on("close", (code, signal) => { proc.exitCode = code ?? -1; if (signal) proc.out += `\n[stopped by ${signal}]`; running.delete(child); });
+
+    // Return as soon as the process prints a local URL or exits, or after waitSec
+    const deadline = Date.now() + waitSec * 1000;
+    while (!proc.url && proc.exitCode === null && Date.now() < deadline) await new Promise((r) => setTimeout(r, 200));
+    return this.#processInfo(proc, 40);
+  }
+
+  processOutput(id, lines = 100) {
+    if (!id) return [...this.processes.values()].map((p) => this.#processInfo(p, 0));
+    return this.#processInfo(this.#getProcess(id), lines);
+  }
+
+  async stopProcess(id) {
+    const proc = this.#getProcess(id);
+    if (proc.exitCode === null) {
+      killTree(proc.child);
+      const deadline = Date.now() + 5000;
+      while (proc.exitCode === null && Date.now() < deadline) await new Promise((r) => setTimeout(r, 100));
+    }
+    return this.#processInfo(proc, 20);
+  }
+
+  #getProcess(id) {
+    const proc = this.processes.get(id);
+    if (!proc) throw new Error(`No background process "${id}". Known: ${[...this.processes.keys()].join(", ") || "none"}`);
+    return proc;
+  }
+
+  #processInfo(p, lines) {
+    const info = { id: p.id, command: p.command, cwd: p.cwd, running: p.exitCode === null, exitCode: p.exitCode, url: p.url, startedAt: p.startedAt };
+    if (lines > 0) info.output = p.out.split(/\r?\n/).slice(-lines).join("\n").trim();
+    return info;
   }
 
   search(pattern, { glob, caseInsensitive = false, maxResults = 200 } = {}) {

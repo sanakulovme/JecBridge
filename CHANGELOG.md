@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.0 — 2026-10-17
+
+- New tools for long-running commands: `start_process` runs a dev server or watcher in the background and returns its local URL, `process_output` shows its logs, `stop_process` stops it with all child processes
+- Background processes are stopped when JecBridge exits (Ctrl+C, closed window, or the stdio client disconnecting)
+- `run_command` points the AI to `start_process` for dev servers instead of letting them time out
+
 ## 0.1.1 — 2026-10-17
 
 - Console messages no longer use ✓ and ⚠, which show up as "?" in Windows cmd.exe

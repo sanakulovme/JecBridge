@@ -18,6 +18,7 @@ export function createServer(ws, log = () => {}) {
       instructions:
         `You are working on a local project on the user's computer: ${path.basename(ws.root)}. ` +
         "Start with project_info and list_files. Prefer edit_file over rewriting whole files. " +
+        "To run a dev server, use start_process and give the user the URL it returns. " +
         (ws.hasGit
           ? "A checkpoint is taken automatically before every change; if something goes wrong, use list_checkpoints + undo. " +
             "When you finish, show the result with diff. "
@@ -179,7 +180,7 @@ export function createServer(ws, log = () => {}) {
 
   server.registerTool("run_command", {
     title: "Run command",
-    description: "Run a terminal command in the project folder (e.g. npm install, npm test, python main.py). In safe mode only allowlisted programs run, without chaining (&&, |, ;). Do not start long-running processes such as dev servers — they will be killed at the timeout.",
+    description: "Run a terminal command in the project folder (e.g. npm install, npm test, python main.py). In safe mode only allowlisted programs run, without chaining (&&, |, ;). For dev servers, watchers and other commands that never finish, use start_process instead — run_command kills them at the timeout.",
     inputSchema: {
       command: z.string(),
       cwd: z.string().default("."),
@@ -190,6 +191,39 @@ export function createServer(ws, log = () => {}) {
     const r = await ws.run(command, { cwd, timeoutSec: timeout_sec });
     return { ...ok(`exit code: ${r.exitCode}\n${r.output || "(no output)"}`), isError: r.exitCode !== 0 };
   }));
+
+  server.registerTool("start_process", {
+    title: "Start background process",
+    description: "Start a long-running command in the background, e.g. a dev server (npm run dev, python manage.py runserver) or a watcher. " +
+      "Returns as soon as the process prints a local URL (like http://localhost:5173) or after wait_sec, with the first output. " +
+      "Tell the user the URL so they can open it in their browser. Same allowlist as run_command. Check logs with process_output, stop with stop_process.",
+    inputSchema: {
+      command: z.string(),
+      cwd: z.string().default("."),
+      wait_sec: z.number().int().min(1).max(60).default(10).describe("How long to wait for the process to print a URL"),
+    },
+    annotations: destructive,
+  }, mutate("start_process", async ({ command, cwd, wait_sec }) => {
+    const info = await ws.startProcess(command, { cwd, waitSec: wait_sec });
+    return { ...ok(info), isError: !info.running && info.exitCode !== 0 };
+  }));
+
+  server.registerTool("process_output", {
+    title: "Background process output",
+    description: "Recent output of a background process (errors, rebuilds) and whether it is still running. Without id: list all background processes.",
+    inputSchema: {
+      id: z.string().optional().describe("Process id from start_process, e.g. p1"),
+      lines: z.number().int().min(1).max(1000).default(100),
+    },
+    annotations: ro,
+  }, safe(async ({ id, lines }) => ok(ws.processOutput(id, lines))));
+
+  server.registerTool("stop_process", {
+    title: "Stop background process",
+    description: "Stop a background process started with start_process, together with its child processes.",
+    inputSchema: { id: z.string().describe("Process id from start_process, e.g. p1") },
+    annotations: rw,
+  }, safe(async ({ id }) => { log("stop_process", id); return ok(await ws.stopProcess(id)); }));
 
   server.registerTool("checkpoint", {
     title: "Save checkpoint",

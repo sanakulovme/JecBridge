@@ -18,7 +18,7 @@ That's it. The folder is created if it doesn't exist, the tunnel tool (cloudflar
 - **ChatGPT:** Settings → Apps & Connectors → *Developer mode* → *Create*
 - **Gemini:** Settings → Connected Apps → *Add a custom app*
 
-Then ask, for example: *"Build a calculator with HTML and CSS in this project."*
+Then ask, for example: *"Build a calculator with HTML and CSS in this project."* or *"Create a Vite + React site and start it."* The AI starts the dev server itself and gives you the `http://localhost:...` link.
 
 > [git](https://git-scm.com) is optional but recommended: with it, every change gets an automatic checkpoint and can be undone. Without git, everything else works.
 
@@ -120,6 +120,8 @@ Then tell the AI: *"Build a Next.js + Tailwind landing page in this folder and c
 | `edit_file` | Replace an exact text snippet (no full rewrite) |
 | `delete_path`, `move_path` | Delete, move, rename |
 | `run_command` | `npm install`, `npm test`, `python main.py`… |
+| `start_process` | Run a dev server or watcher in the background (`npm run dev`) and get its URL |
+| `process_output`, `stop_process` | Read a background process's logs, stop it |
 | `checkpoint`, `list_checkpoints` | Save and list project states |
 | `diff` | What changed since a checkpoint |
 | `undo` | Roll back to a checkpoint (the undo itself can be undone) |
@@ -152,7 +154,7 @@ Plain APIs like DeepSeek, Ollama or the OpenAI API need an agent with an MCP cli
 ## Tests
 
 ```bash
-npm test     # 24 end-to-end tests: build from scratch, edit, undo, security, stdio, read-only, no-git
+npm test     # 28 end-to-end tests: build from scratch, edit, undo, security, dev servers, stdio, read-only, no-git
 ```
 
 ## License

@@ -1,6 +1,6 @@
 {
   "name": "jecbridge",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Connect any local code project to any AI (ChatGPT, Claude, Cursor) over MCP — read, edit, run and build, with automatic checkpoints and undo.",
   "type": "module",
   "bin": {
