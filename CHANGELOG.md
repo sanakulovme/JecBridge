@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.1 — 2026-10-17
+
+- Console messages no longer use ✓ and ⚠, which show up as "?" in Windows cmd.exe
+
 ## 0.1.0 — 2026-10-17
 
 First public release.

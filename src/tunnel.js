@@ -85,7 +85,7 @@ export async function startTunnel(localUrl, log = console.log) {
     cf.on("error", (e) => { clearTimeout(timer); reject(e); });
     cf.on("exit", (code) => {
       clearTimeout(timer);
-      if (ready) log(`⚠ The tunnel stopped (cloudflared exited with code ${code}). Restart JecBridge to get a new URL.`);
+      if (ready) log(`WARNING: the tunnel stopped (cloudflared exited with code ${code}). Restart JecBridge to get a new URL.`);
       else reject(new Error(`cloudflared exited (code ${code}):\n${out.slice(-1500)}`));
     });
   });

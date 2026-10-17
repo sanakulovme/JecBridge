@@ -183,7 +183,7 @@ async function startHttp() {
   let publicUrl;
   try { publicUrl = await startTunnel(local, (m) => console.log(m)); }
   catch (e) {
-    console.error(`\n⚠ Could not open the tunnel: ${e.message}\n` +
+    console.error(`\nWARNING: could not open the tunnel: ${e.message}\n` +
       `The server still works locally. Alternative: ngrok http ${port}  → then append /mcp/${token} to its URL.`);
     return;
   }
@@ -192,13 +192,13 @@ async function startHttp() {
   console.log(`
 ┌─ Add this URL to your AI as a connector ──────────────────
 │ ${url}
-│ ${copied ? "✓ Copied to the clipboard — just paste it." : ""}
+│ ${copied ? "Copied to the clipboard — just paste it." : ""}
 │
 │ claude.ai:  Settings → Connectors → Add custom connector
 │ ChatGPT:    Settings → Apps & Connectors → Developer mode → Create
 │ Gemini:     Settings → Connected Apps → Add a custom app
 │
-│ ⚠ Never share this URL — it contains your secret token.
+│ WARNING: never share this URL — it contains your secret token.
 │ Keep this window open. Press Ctrl+C to stop.
 └───────────────────────────────────────────────────────────`);
 }
