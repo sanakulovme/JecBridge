@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-label="JecBridge">
+  <rect width="128" height="128" rx="28" fill="#0D1117"/>
+  <g transform="translate(17 24)">
+    <path d="M72 8 L72 46" stroke="#3B82F6" stroke-width="8" stroke-linecap="round"/>
+    <path d="M72 46 A30 30 0 0 1 12 46" fill="none" stroke="#3B82F6" stroke-width="8" stroke-linecap="round"/>
+    <path d="M2 46 L92 46" stroke="#10B981" stroke-width="6" stroke-linecap="round"/>
+    <path d="M24 49 L24 65 M42 49 L42 71 M60 49 L60 65" stroke="#10B981" stroke-width="3" stroke-linecap="round"/>
+  </g>
+</svg>

@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 96" width="360" height="96" role="img" aria-label="JecBridge">
+  <g transform="translate(8 8)">
+    <path d="M72 8 L72 46" stroke="#2563EB" stroke-width="8" stroke-linecap="round"/>
+    <path d="M72 46 A30 30 0 0 1 12 46" fill="none" stroke="#2563EB" stroke-width="8" stroke-linecap="round"/>
+    <path d="M2 46 L92 46" stroke="#10B981" stroke-width="6" stroke-linecap="round"/>
+    <path d="M24 49 L24 65 M42 49 L42 71 M60 49 L60 65" stroke="#10B981" stroke-width="3" stroke-linecap="round"/>
+  </g>
+  <text x="116" y="64" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="44" font-weight="600" letter-spacing="-0.5"><tspan fill="#2563EB">Jec</tspan><tspan fill="#111827">Bridge</tspan></text>
+</svg>
