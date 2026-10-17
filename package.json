@@ -1,0 +1,54 @@
+{
+  "name": "jecbridge",
+  "version": "0.1.0",
+  "description": "Connect any local code project to any AI (ChatGPT, Claude, Cursor) over MCP — read, edit, run and build, with automatic checkpoints and undo.",
+  "type": "module",
+  "bin": {
+    "jecbridge": "src/cli.js"
+  },
+  "main": "src/cli.js",
+  "files": [
+    "src/",
+    "README.md",
+    "README.uz.md",
+    "LICENSE",
+    "SECURITY.md",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "start": "node src/cli.js",
+    "test": "node test/e2e.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "mcp-server",
+    "ai",
+    "chatgpt",
+    "claude",
+    "cursor",
+    "coding-agent",
+    "local",
+    "llm",
+    "tunnel"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sanakulovme/jecbridge.git"
+  },
+  "homepage": "https://github.com/sanakulovme/jecbridge#readme",
+  "bugs": {
+    "url": "https://github.com/sanakulovme/jecbridge/issues"
+  },
+  "author": "Abbos",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "cross-spawn": "^7.0.6",
+    "express": "^5.3.0",
+    "zod": "^4.6.7"
+  }
+}

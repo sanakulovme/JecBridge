@@ -1,0 +1,19 @@
+name: Bug report
+description: Something doesn't work
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes: { label: What happened?, description: Include the exact error and terminal output. }
+    validations: { required: true }
+  - type: input
+    id: client
+    attributes: { label: AI client, placeholder: "ChatGPT / claude.ai / Claude Desktop / Cursor / ..." }
+    validations: { required: true }
+  - type: input
+    id: env
+    attributes: { label: OS and Node version, placeholder: "Windows 11, Node 22.11" }
+    validations: { required: true }
+  - type: input
+    id: command
+    attributes: { label: Command you ran, placeholder: "npx jecbridge ./app --tunnel" }

@@ -1,0 +1,4 @@
+node_modules/
+.jecbridge/
+*.tgz
+.DS_Store

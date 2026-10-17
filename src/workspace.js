@@ -1,0 +1,273 @@
+// Workspace: every file and command operation is confined to the project root.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import crypto from "node:crypto";
+import { spawn, execFileSync } from "node:child_process";
+import crossSpawn from "cross-spawn";
+
+const DENY_PATTERNS = [
+  // "i": Windows and macOS filesystems are case-insensitive (.ENV == .env)
+  /(^|\/)\.git(\/|$)/i,
+  /(^|\/)\.jecbridge(\/|$)/i,
+  /(^|\/)\.env(\..*)?$/i,
+  /\.(pem|key|p12|pfx)$/i,
+  /(^|\/)id_(rsa|ed25519|ecdsa)(\.pub)?$/i,
+];
+
+const isDenied = (p) => DENY_PATTERNS.some((re) => re.test(p));
+
+// Environment variables that look like credentials are not passed to commands in safe mode
+const SECRET_ENV = /TOKEN|SECRET|PASSW(OR)?D|API_?KEY|PRIVATE_?KEY|CREDENTIAL|AUTH/i;
+
+const BLOCKED_GIT = ["push", "remote", "config", "credential"];
+
+// Children still running when the server exits are killed with it
+const running = new Set();
+process.on("exit", () => { for (const c of running) killTree(c); });
+
+function killTree(child) {
+  if (!child.pid) return;
+  try {
+    if (process.platform === "win32") execFileSync("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore" });
+    else process.kill(-child.pid, "SIGKILL"); // the child leads its own process group (detached)
+  } catch { try { child.kill("SIGKILL"); } catch {} }
+}
+
+const DEFAULT_ALLOWED = [
+  "npm", "npx", "pnpm", "yarn", "bun", "node", "deno", "tsc",
+  "python", "python3", "pip", "pip3", "pytest", "uv",
+  "go", "cargo", "rustc", "dotnet", "java", "javac", "mvn", "gradle",
+  "make", "php", "composer", "ruby", "bundle",
+  "ls", "cat", "echo", "pwd", "dir", "type", "where", "git", "eslint", "prettier", "jest", "vitest",
+];
+
+export class Workspace {
+  constructor(root, opts = {}) {
+    this.root = fs.realpathSync(path.resolve(root));
+    this.allowAllCommands = !!opts.allowAllCommands;
+    this.allowed = new Set(opts.allowedCommands || DEFAULT_ALLOWED);
+    this.readOnly = !!opts.readOnly;
+    // Read-only mode must not write into the project, so its metadata lives in the temp folder
+    this.metaDir = this.readOnly
+      ? path.join(os.tmpdir(), "jecbridge", crypto.createHash("sha256").update(this.root).digest("hex").slice(0, 16))
+      : path.join(this.root, ".jecbridge");
+    this.gitDir = path.join(this.metaDir, "shadow.git");
+    this.#initShadowGit();
+  }
+
+  // ---------- safe path resolution ----------
+  resolve(rel = ".", { forWrite = false } = {}) {
+    if (typeof rel !== "string") throw new Error("path must be a string");
+    const abs = path.resolve(this.root, rel.replace(/^\/+/, ""));
+    const relToRoot = path.relative(this.root, abs);
+    if (relToRoot.startsWith("..") || path.isAbsolute(relToRoot)) {
+      throw new Error(`Access denied: "${rel}" is outside the project folder`);
+    }
+    // block escapes through symlinks
+    let probe = abs;
+    while (!fs.existsSync(probe)) probe = path.dirname(probe);
+    const real = fs.realpathSync(probe);
+    if (real !== this.root && !real.startsWith(this.root + path.sep)) {
+      throw new Error(`Access denied: "${rel}" resolves outside the project via a symlink`);
+    }
+    const norm = relToRoot.split(path.sep).join("/");
+    if (norm && isDenied(norm)) {
+      throw new Error(`Access denied: "${norm}" is protected (secret or internal file)`);
+    }
+    if (forWrite && this.readOnly) throw new Error("Server is running in read-only mode");
+    return { abs, rel: norm || "." };
+  }
+
+  // ---------- shadow git (never touches the project's own .git) ----------
+  #git(args, opts = {}) {
+    return execFileSync("git", args, {
+      cwd: this.root,
+      env: {
+        ...process.env,
+        GIT_DIR: this.gitDir,
+        GIT_WORK_TREE: this.root,
+        GIT_AUTHOR_NAME: "JecBridge", GIT_AUTHOR_EMAIL: "jecbridge@local",
+        GIT_COMMITTER_NAME: "JecBridge", GIT_COMMITTER_EMAIL: "jecbridge@local",
+      },
+      encoding: "utf8",
+      maxBuffer: 50 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "pipe"],
+      ...opts,
+    });
+  }
+
+  #initShadowGit() {
+    if (!fs.existsSync(this.gitDir)) {
+      fs.mkdirSync(this.metaDir, { recursive: true });
+      execFileSync("git", ["init", "--bare", "-q", this.gitDir], { stdio: "ignore" });
+      this.#git(["config", "core.bare", "false"]);
+      this.#git(["config", "core.autocrlf", "false"]);
+      this.#git(["config", "core.ignorecase", "true"]);
+      fs.writeFileSync(path.join(this.metaDir, ".gitignore"), "*\n");
+    }
+    const exclude = path.join(this.gitDir, "info", "exclude");
+    fs.mkdirSync(path.dirname(exclude), { recursive: true });
+    fs.writeFileSync(exclude, [".jecbridge/", ".git/", "node_modules/", ".venv/", "venv/",
+      "__pycache__/", "dist/", "build/", ".next/", "target/", ".DS_Store", ".env", ".env.*", ""].join("\n"));
+  }
+
+  hasCommits() {
+    try { this.#git(["rev-parse", "--verify", "HEAD"]); return true; } catch { return false; }
+  }
+
+  checkpoint(label = "checkpoint") {
+    this.#git(["add", "-A"]);
+    const changed = !this.hasCommits() ||
+      this.#git(["diff", "--cached", "--name-only"]).trim().length > 0;
+    if (!changed) return { created: false, id: this.#git(["rev-parse", "--short", "HEAD"]).trim() };
+    this.#git(["commit", "-q", "--allow-empty", "-m", label]);
+    return { created: true, id: this.#git(["rev-parse", "--short", "HEAD"]).trim() };
+  }
+
+  listCheckpoints(limit = 20) {
+    if (!this.hasCommits()) return [];
+    return this.#git(["log", `-${limit}`, "--format=%h|%cI|%s"]).trim().split("\n")
+      .filter(Boolean).map((l) => { const [id, time, ...m] = l.split("|"); return { id, time, label: m.join("|") }; });
+  }
+
+  diff(since) {
+    if (!this.hasCommits()) return "(no checkpoints yet)";
+    this.#git(["add", "-A", "-N"]); // include new files in the diff
+    const out = this.#git(["diff", since || "HEAD", "--stat", "--patch", "--no-color"]);
+    return out.trim() || "(no changes)";
+  }
+
+  restore(id) {
+    if (this.readOnly) throw new Error("Server is running in read-only mode");
+    this.#git(["rev-parse", "--verify", `${id}^{commit}`]);
+    const safety = this.checkpoint(`auto-save before undo (→ ${id})`);
+    const current = this.#git(["rev-parse", "HEAD"]).trim();
+    const added = this.#git(["diff", "--name-only", "--diff-filter=A", id, current]).trim().split("\n").filter(Boolean);
+    for (const f of added) fs.rmSync(path.join(this.root, f), { force: true });
+    this.#git(["checkout", id, "--", "."]);
+    this.#git(["reset", "-q", "--mixed", id]);
+    this.#git(["update-ref", "refs/jecbridge/before-undo", current]);
+    return { restoredTo: id, removedFiles: added, redoId: safety.id };
+  }
+
+  listFiles(dir = ".", maxDepth = 4, limit = 2000) {
+    const { rel } = this.resolve(dir);
+    this.#git(["add", "-A", "-N"]);
+    let files = this.#git(["ls-files", "-co", "--exclude-standard", ...(rel === "." ? [] : ["--", rel])])
+      .split("\n").filter(Boolean);
+    files = [...new Set(files)].filter((f) => {
+      const depth = (rel === "." ? f : path.posix.relative(rel, f)).split("/").length;
+      return depth <= maxDepth && !isDenied(f) && fs.existsSync(path.join(this.root, f));
+    }).sort();
+    return { files: files.slice(0, limit), truncated: files.length > limit, total: files.length };
+  }
+
+  // ---------- commands ----------
+  #parseArgs(cmd) {
+    const out = []; let cur = ""; let q = null;
+    for (const ch of cmd) {
+      if (q) { if (ch === q) q = null; else cur += ch; }
+      else if (ch === '"' || ch === "'") q = ch;
+      else if (/\s/.test(ch)) { if (cur) { out.push(cur); cur = ""; } }
+      else cur += ch;
+    }
+    if (q) throw new Error("Unclosed quote in command");
+    if (cur) out.push(cur);
+    return out;
+  }
+
+  #childEnv() {
+    const env = {};
+    for (const [k, v] of Object.entries(process.env)) {
+      if (k.toUpperCase() === "JECBRIDGE_TOKEN") continue;
+      if (!this.allowAllCommands && SECRET_ENV.test(k)) continue;
+      env[k] = v;
+    }
+    return env;
+  }
+
+  // Arguments (and --opt=value values) that point outside the project or at protected files are rejected,
+  // so allowlisted tools like cat, ls or git can't be used to bypass the folder jail
+  #checkArgs(args, cwdAbs) {
+    for (const arg of args) {
+      const eq = arg.indexOf("=");
+      for (const a of eq > 0 ? [arg, arg.slice(eq + 1)] : [arg]) {
+        if (!a || /^[a-z][a-z0-9+.-]*:\/\//i.test(a)) continue; // URLs
+        try { this.resolve(path.relative(this.root, path.resolve(cwdAbs, a))); }
+        catch { throw new Error(`Argument "${arg}" points outside the project or at a protected file — blocked in safe mode`); }
+      }
+    }
+  }
+
+  run(command, { cwd = ".", timeoutSec = 120 } = {}) {
+    if (this.readOnly) throw new Error("Server is running in read-only mode");
+    const { abs: cwdAbs } = this.resolve(cwd);
+    const opts = { cwd: cwdAbs, env: this.#childEnv(), windowsHide: true, detached: process.platform !== "win32" };
+    let child;
+    if (this.allowAllCommands) {
+      child = spawn(command, { ...opts, shell: true });
+    } else {
+      if (/[;&|`<>\r\n]|\$\(/.test(command)) {
+        throw new Error("Safe mode does not allow ; && | ` > < $( or line breaks. Run each command in a separate call, or start the server with --allow-all-commands.");
+      }
+      const [bin, ...args] = this.#parseArgs(command);
+      if (!bin || !this.allowed.has(bin)) {
+        throw new Error(`"${bin}" is not in the command allowlist. Allowed: ${[...this.allowed].join(", ")}`);
+      }
+      if (bin === "git" && args[0]?.startsWith("-")) {
+        throw new Error("git options before the subcommand (-C, -c, --git-dir, ...) are blocked in safe mode");
+      }
+      if (bin === "git" && BLOCKED_GIT.includes(args[0])) {
+        throw new Error(`"git ${args[0]}" is blocked in safe mode`);
+      }
+      this.#checkArgs(args, cwdAbs);
+      // cross-spawn finds .cmd shims (npm, npx) on Windows and escapes every argument for cmd.exe,
+      // so spaces stay inside one argument and %VAR% / ^ are not expanded
+      child = crossSpawn(bin, args, opts);
+    }
+    running.add(child);
+    return new Promise((resolve) => {
+      let out = ""; const cap = 60_000;
+      const add = (d) => { if (out.length < cap) out += d.toString(); };
+      child.stdout.on("data", add); child.stderr.on("data", add);
+      const timer = setTimeout(() => { killTree(child); out += `\n[killed after ${timeoutSec}s timeout]`; }, timeoutSec * 1000);
+      const done = (r) => { clearTimeout(timer); running.delete(child); resolve(r); };
+      child.on("error", (e) => done({ exitCode: -1, output: String(e.message) }));
+      child.on("close", (code) => {
+        if (out.length >= cap) out = out.slice(0, cap) + "\n[...output truncated]";
+        done({ exitCode: code, output: out });
+      });
+    });
+  }
+
+  search(pattern, { glob, caseInsensitive = false, maxResults = 200 } = {}) {
+    const args = ["--line-number", "--no-heading", "--path-separator", "/", "--color=never", "--max-columns=300",
+      "--glob-case-insensitive", "-g", "!.jecbridge", "-g", "!.git", "-g", "!.env*"];
+    if (caseInsensitive) args.push("-i");
+    if (glob) args.push("-g", glob);
+    args.push("--", pattern, ".");
+    try {
+      const out = execFileSync("rg", args, { cwd: this.root, encoding: "utf8", maxBuffer: 20 * 1024 * 1024 });
+      // rg globs/ignore rules may be case-sensitive — filter protected paths again
+      const lines = out.split("\n").filter(Boolean).map((l) => l.replace(/^\.\//, ""))
+        .filter((l) => !isDenied(l.split(":")[0]));
+      if (!lines.length) return "(no matches)";
+      return lines.slice(0, maxResults).join("\n") + (lines.length > maxResults ? `\n[...${lines.length - maxResults} more matches]` : "");
+    } catch (e) {
+      if (e.status === 1) return "(no matches)";
+      if (e.code === "ENOENT") return this.#grepFallback(pattern, caseInsensitive, maxResults);
+      throw new Error(e.stderr?.toString() || e.message);
+    }
+  }
+
+  #grepFallback(pattern, ci, max) {
+    const re = new RegExp(pattern, ci ? "i" : "");
+    const res = [];
+    for (const f of this.listFiles(".", 50, 20000).files) {
+      let text; try { text = fs.readFileSync(path.join(this.root, f), "utf8"); } catch { continue; }
+      text.split("\n").forEach((l, i) => { if (res.length < max && re.test(l)) res.push(`${f}:${i + 1}:${l.slice(0, 300)}`); });
+    }
+    return res.join("\n") || "(no matches)";
+  }
+}
