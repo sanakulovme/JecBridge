@@ -3,39 +3,46 @@
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
-import { spawn } from "node:child_process";
+import os from "node:os";
+import http from "node:http";
 import express from "express";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { Workspace } from "./workspace.js";
 import { createServer } from "./tools.js";
 import { VERSION } from "./version.js";
+import { startTunnel, copyToClipboard } from "./tunnel.js";
 
 const HELP = `
 JecBridge — connect a local project to any AI over MCP
 
 Usage:
-  jecbridge <project-folder> [options]
+  jecbridge [project-folder] [options]
+
+  The folder defaults to the current one and is created if it doesn't exist.
+
+Quick start (claude.ai, ChatGPT, Gemini):
+  npx jecbridge my-app --tunnel
 
 Options:
   --stdio                 stdio transport (Claude Desktop, Cursor, Claude Code)
   --port <n>              HTTP port (default: 8787)
   --host <h>              HTTP host (default: 127.0.0.1)
-  --tunnel                open a Cloudflare quick tunnel (public URL for ChatGPT, claude.ai)
+  --tunnel                public HTTPS URL for web AIs (cloudflared is downloaded automatically)
   --token <t>             secret token (default: generated and saved)
   --read-only             read-only mode (no writes, no commands, nothing saved in the project)
   --allow-all-commands    allow any shell command (USE WITH CARE)
   --allow <a,b,c>         replace the command allowlist
-  --init                  create the folder if it doesn't exist (new projects)
   -v, --version
   -h, --help
 `;
 
-function usageError(msg) { console.error(`${msg}
-Run "jecbridge --help" for usage.`); process.exit(2); }
+const DEFAULT_PORT = 8787;
+
+function usageError(msg) { console.error(`${msg}\nRun "jecbridge --help" for usage.`); process.exit(2); }
 
 function parseArgs(argv) {
-  const o = { port: 8787, host: "127.0.0.1" };
+  const o = { port: DEFAULT_PORT, host: "127.0.0.1" };
   const value = (i, name) => {
     const v = argv[i];
     if (v === undefined || v.startsWith("-")) usageError(`${name} needs a value`);
@@ -49,8 +56,9 @@ function parseArgs(argv) {
     else if (a === "--tunnel") o.tunnel = true;
     else if (a === "--read-only") o.readOnly = true;
     else if (a === "--allow-all-commands") o.allowAll = true;
-    else if (a === "--init") o.init = true;
+    else if (a === "--init") {} // kept for compatibility: missing folders are created anyway
     else if (a === "--port") {
+      o.portSet = true;
       o.port = Number(value(++i, a));
       if (!Number.isInteger(o.port) || o.port < 1 || o.port > 65535) usageError(`--port must be a number from 1 to 65535, got "${argv[i]}"`);
     }
@@ -68,12 +76,17 @@ function parseArgs(argv) {
 
 const opts = parseArgs(process.argv.slice(2));
 if (opts.version) { console.log(VERSION); process.exit(0); }
-if (opts.help || !opts.root) { console.log(HELP); process.exit(opts.help ? 0 : 1); }
+if (opts.help) { console.log(HELP); process.exit(0); }
 
-const rootAbs = path.resolve(opts.root);
+const rootAbs = path.resolve(opts.root || ".");
+// Never hand the AI a whole home folder or drive by accident
+if (!opts.root && (rootAbs === os.homedir() || rootAbs === path.parse(rootAbs).root)) {
+  console.error(`You are in ${rootAbs}. Name a project folder, e.g.:\n  jecbridge my-app --tunnel`);
+  process.exit(1);
+}
 if (!fs.existsSync(rootAbs)) {
-  if (opts.init) fs.mkdirSync(rootAbs, { recursive: true });
-  else { console.error(`Folder not found: ${rootAbs}\nAdd --init to create it for a new project.`); process.exit(1); }
+  fs.mkdirSync(rootAbs, { recursive: true });
+  console.error(`Created new folder: ${rootAbs}`);
 }
 
 const ws = new Workspace(rootAbs, {
@@ -152,47 +165,58 @@ async function startHttp() {
     app.delete(route, auth, notAllowed);
   }
 
-  await new Promise((r) => app.listen(opts.port, opts.host, r));
-  const local = `http://${opts.host}:${opts.port}`;
+  const port = await listen(app);
+  const local = `http://${opts.host}:${port}`;
   console.log(`
 ┌─ JecBridge is running ───────────────────────────────────
 │ Project:  ${ws.root}
 │ Mode:     ${ws.readOnly ? "read-only" : "read + write"} · commands: ${ws.allowAllCommands ? "ALL ALLOWED" : "safe allowlist"}
+│ Undo:     ${ws.hasGit ? "automatic checkpoints on" : "OFF — install git to enable checkpoints and undo"}
 │ Local:    ${local}/mcp/${token}
-│ Token:    ${token}
 └───────────────────────────────────────────────────────────`);
 
-  if (opts.tunnel) startTunnel(local, token);
-  else console.log(`\nNeed a public URL for ChatGPT or claude.ai? Restart with --tunnel.\n`);
-}
-
-function startTunnel(local, token) {
-  const cf = spawn("cloudflared", ["tunnel", "--no-autoupdate", "--url", local], { stdio: ["ignore", "pipe", "pipe"] });
-  let shown = false;
-  const onData = (d) => {
-    const m = d.toString().match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/);
-    if (m && !shown) {
-      shown = true;
-      console.log(`
-┌─ Public URL — add this to your AI as a connector ─────────
-│ ${m[0]}/mcp/${token}
+  if (!opts.tunnel) {
+    console.log(`\nUsing claude.ai, ChatGPT or Gemini? Restart with --tunnel to get a public URL.\n`);
+    return;
+  }
+  console.log("\nOpening a public tunnel...");
+  let publicUrl;
+  try { publicUrl = await startTunnel(local, (m) => console.log(m)); }
+  catch (e) {
+    console.error(`\n⚠ Could not open the tunnel: ${e.message}\n` +
+      `The server still works locally. Alternative: ngrok http ${port}  → then append /mcp/${token} to its URL.`);
+    return;
+  }
+  const url = `${publicUrl}/mcp/${token}`;
+  const copied = copyToClipboard(url);
+  console.log(`
+┌─ Add this URL to your AI as a connector ──────────────────
+│ ${url}
+│ ${copied ? "✓ Copied to the clipboard — just paste it." : ""}
 │
 │ claude.ai:  Settings → Connectors → Add custom connector
 │ ChatGPT:    Settings → Apps & Connectors → Developer mode → Create
+│ Gemini:     Settings → Connected Apps → Add a custom app
+│
 │ ⚠ Never share this URL — it contains your secret token.
+│ Keep this window open. Press Ctrl+C to stop.
 └───────────────────────────────────────────────────────────`);
-    }
-  };
-  cf.stdout.on("data", onData);
-  cf.stderr.on("data", onData);
-  cf.on("error", () => {
-    console.log(`
-⚠ cloudflared not found. Install it:
-   macOS:   brew install cloudflared
-   Windows: winget install --id Cloudflare.cloudflared
-   Linux:   https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/
-Or use ngrok:  ngrok http ${local.split(":").pop()}   → then append /mcp/<token> to its URL.`);
+}
+
+// Listen on the chosen port; if it's busy and the user didn't pick one, try the next ones
+function listen(app) {
+  return new Promise((resolve, reject) => {
+    const tryPort = (port, left) => {
+      // http.createServer, not app.listen: Express 5 also calls the listen callback on errors
+      const server = http.createServer(app);
+      server.once("listening", () => resolve(port));
+      server.once("error", (e) => {
+        if (e.code === "EADDRINUSE" && !opts.portSet && left > 0) tryPort(port + 1, left - 1);
+        else if (e.code === "EADDRINUSE") { console.error(`Port ${port} is already in use. Pick another one with --port.`); process.exit(1); }
+        else reject(e);
+      });
+      server.listen(port, opts.host);
+    };
+    tryPort(opts.port, 20);
   });
-  process.on("exit", () => cf.kill());
-  process.on("SIGINT", () => { cf.kill(); process.exit(0); });
 }

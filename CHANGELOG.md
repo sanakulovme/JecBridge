@@ -11,6 +11,12 @@ First public release.
 - `--read-only` writes nothing into the project
 - CLI options are validated (`--port`, `--allow`, missing values)
 - English README
+- One-line start: `npx jecbridge my-app --tunnel`
+  - the folder defaults to the current one and is created if missing (`--init` is no longer needed)
+  - cloudflared is downloaded automatically on first `--tunnel` use
+  - the connector URL is copied to the clipboard, with steps for claude.ai, ChatGPT and Gemini
+  - a busy port moves to the next free one
+- Works without git: checkpoints and undo are turned off with a clear message, everything else works
 
 - 13 MCP tools: read, search, write, edit, delete, move, run commands, checkpoint, diff, undo
 - Streamable HTTP transport with token auth, plus stdio

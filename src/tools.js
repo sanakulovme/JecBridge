@@ -18,8 +18,11 @@ export function createServer(ws, log = () => {}) {
       instructions:
         `You are working on a local project on the user's computer: ${path.basename(ws.root)}. ` +
         "Start with project_info and list_files. Prefer edit_file over rewriting whole files. " +
-        "A checkpoint is taken automatically before every change; if something goes wrong, use list_checkpoints + undo. " +
-        "When you finish, show the result with diff. Reply to the user in their own language.",
+        (ws.hasGit
+          ? "A checkpoint is taken automatically before every change; if something goes wrong, use list_checkpoints + undo. " +
+            "When you finish, show the result with diff. "
+          : "Checkpoints and undo are OFF (git is not installed), so be careful with destructive changes. ") +
+        "Reply to the user in their own language.",
     },
   );
 
@@ -54,7 +57,7 @@ export function createServer(ws, log = () => {}) {
       empty: total === 0,
       topLevel: files,
       totalFilesTopLevel: total,
-      mode: { readOnly: ws.readOnly, commands: ws.allowAllCommands ? "all allowed" : [...ws.allowed] },
+      mode: { readOnly: ws.readOnly, checkpoints: ws.hasGit, commands: ws.allowAllCommands ? "all allowed" : [...ws.allowed] },
       keyFiles: found,
     });
   }));

@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
-import { spawn, execFileSync } from "node:child_process";
+import { spawn, spawnSync, execFileSync } from "node:child_process";
 import crossSpawn from "cross-spawn";
 
 const DENY_PATTERNS = [
@@ -34,6 +34,11 @@ function killTree(child) {
   } catch { try { child.kill("SIGKILL"); } catch {} }
 }
 
+// Folders skipped when listing files without git (git uses .gitignore + info/exclude instead)
+const SKIP_DIRS = new Set(["node_modules", ".git", ".jecbridge", ".venv", "venv", "__pycache__", "dist", "build", ".next", "target"]);
+
+const NO_GIT = "Checkpoints and undo are off because git is not installed. Install git (https://git-scm.com) and restart JecBridge.";
+
 const DEFAULT_ALLOWED = [
   "npm", "npx", "pnpm", "yarn", "bun", "node", "deno", "tsc",
   "python", "python3", "pip", "pip3", "pytest", "uv",
@@ -53,7 +58,11 @@ export class Workspace {
       ? path.join(os.tmpdir(), "jecbridge", crypto.createHash("sha256").update(this.root).digest("hex").slice(0, 16))
       : path.join(this.root, ".jecbridge");
     this.gitDir = path.join(this.metaDir, "shadow.git");
-    this.#initShadowGit();
+    fs.mkdirSync(this.metaDir, { recursive: true });
+    fs.writeFileSync(path.join(this.metaDir, ".gitignore"), "*\n");
+    // Without git everything still works, only checkpoints/undo/diff are unavailable
+    this.hasGit = spawnSync("git", ["--version"], { stdio: "ignore", windowsHide: true }).status === 0;
+    if (this.hasGit) this.#initShadowGit();
   }
 
   // ---------- safe path resolution ----------
@@ -99,12 +108,10 @@ export class Workspace {
 
   #initShadowGit() {
     if (!fs.existsSync(this.gitDir)) {
-      fs.mkdirSync(this.metaDir, { recursive: true });
       execFileSync("git", ["init", "--bare", "-q", this.gitDir], { stdio: "ignore" });
       this.#git(["config", "core.bare", "false"]);
       this.#git(["config", "core.autocrlf", "false"]);
       this.#git(["config", "core.ignorecase", "true"]);
-      fs.writeFileSync(path.join(this.metaDir, ".gitignore"), "*\n");
     }
     const exclude = path.join(this.gitDir, "info", "exclude");
     fs.mkdirSync(path.dirname(exclude), { recursive: true });
@@ -113,10 +120,12 @@ export class Workspace {
   }
 
   hasCommits() {
+    if (!this.hasGit) return false;
     try { this.#git(["rev-parse", "--verify", "HEAD"]); return true; } catch { return false; }
   }
 
   checkpoint(label = "checkpoint") {
+    if (!this.hasGit) return { created: false, id: null, note: NO_GIT };
     this.#git(["add", "-A"]);
     const changed = !this.hasCommits() ||
       this.#git(["diff", "--cached", "--name-only"]).trim().length > 0;
@@ -132,6 +141,7 @@ export class Workspace {
   }
 
   diff(since) {
+    if (!this.hasGit) return NO_GIT;
     if (!this.hasCommits()) return "(no checkpoints yet)";
     this.#git(["add", "-A", "-N"]); // include new files in the diff
     const out = this.#git(["diff", since || "HEAD", "--stat", "--patch", "--no-color"]);
@@ -140,6 +150,7 @@ export class Workspace {
 
   restore(id) {
     if (this.readOnly) throw new Error("Server is running in read-only mode");
+    if (!this.hasGit) throw new Error(NO_GIT);
     this.#git(["rev-parse", "--verify", `${id}^{commit}`]);
     const safety = this.checkpoint(`auto-save before undo (→ ${id})`);
     const current = this.#git(["rev-parse", "HEAD"]).trim();
@@ -153,14 +164,37 @@ export class Workspace {
 
   listFiles(dir = ".", maxDepth = 4, limit = 2000) {
     const { rel } = this.resolve(dir);
-    this.#git(["add", "-A", "-N"]);
-    let files = this.#git(["ls-files", "-co", "--exclude-standard", ...(rel === "." ? [] : ["--", rel])])
-      .split("\n").filter(Boolean);
+    let files;
+    if (this.hasGit) {
+      this.#git(["add", "-A", "-N"]);
+      files = this.#git(["ls-files", "-co", "--exclude-standard", ...(rel === "." ? [] : ["--", rel])])
+        .split("\n").filter(Boolean);
+    } else {
+      files = this.#walk(rel, maxDepth, limit + 1);
+    }
     files = [...new Set(files)].filter((f) => {
       const depth = (rel === "." ? f : path.posix.relative(rel, f)).split("/").length;
       return depth <= maxDepth && !isDenied(f) && fs.existsSync(path.join(this.root, f));
     }).sort();
     return { files: files.slice(0, limit), truncated: files.length > limit, total: files.length };
+  }
+
+  // Plain directory walk used when git is not installed; doesn't follow symlinks
+  #walk(rel, maxDepth, cap) {
+    const out = [];
+    const visit = (dirRel, depth) => {
+      if (out.length >= cap || depth > maxDepth) return;
+      let entries;
+      try { entries = fs.readdirSync(path.join(this.root, dirRel), { withFileTypes: true }); } catch { return; }
+      for (const e of entries) {
+        const p = dirRel === "." ? e.name : `${dirRel}/${e.name}`;
+        if (e.isDirectory()) { if (!SKIP_DIRS.has(e.name.toLowerCase())) visit(p, depth + 1); }
+        else if (e.isFile()) out.push(p);
+        if (out.length >= cap) return;
+      }
+    };
+    visit(rel, 1);
+    return out;
   }
 
   // ---------- commands ----------

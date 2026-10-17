@@ -2,11 +2,27 @@
 
 🇬🇧 [English](README.md) · 🇺🇿 O'zbekcha
 
-Kompyuteringizdagi **istalgan kodli loyihani** MCP orqali **istalgan AI provayderga** ulaydi: claude.ai, ChatGPT, Claude Desktop, Cursor, Claude Code, VS Code. AI loyihani o'qiydi, o'zgartiradi, testlarni ishga tushiradi yoki noldan quradi. Har bir o'zgarishdan oldin avtomatik checkpoint olinadi, shuning uchun AI xato qilsa bir buyruq bilan orqaga qaytasiz.
+Kompyuteringizdagi **istalgan kodli loyihani** MCP orqali **istalgan AI provayderga** ulaydi: claude.ai, ChatGPT, Gemini, Claude Desktop, Cursor, Claude Code, VS Code. AI loyihani o'qiydi, o'zgartiradi, testlarni ishga tushiradi yoki noldan quradi. Har bir o'zgarishdan oldin avtomatik checkpoint olinadi, shuning uchun AI xato qilsa bir buyruq bilan orqaga qaytasiz.
 
-## O'rnatish
+## Tezkor boshlash
 
-Node.js 22+ va git kerak.
+Faqat [Node.js 22+](https://nodejs.org) kerak. Keyin bitta qator:
+
+```bash
+npx jecbridge my-app --tunnel
+```
+
+Tamom. Papka yo'q bo'lsa o'zi yaratiladi, tunnel dasturi (cloudflared) birinchi marta avtomatik yuklab olinadi, connector URL'i esa clipboard'ga nusxalanadi. Uni AI'ga qo'ying:
+
+- **claude.ai:** Settings → Connectors → *Add custom connector*
+- **ChatGPT:** Settings → Apps & Connectors → *Developer mode* → *Create*
+- **Gemini:** Settings → Connected Apps → *Add a custom app*
+
+Keyin masalan shunday yozing: *"Shu loyihada HTML va CSS bilan kalkulyator yarat."*
+
+> [git](https://git-scm.com) ixtiyoriy, lekin tavsiya etiladi: u bilan har bir o'zgarishga avtomatik checkpoint olinadi va undo qilish mumkin bo'ladi. Git bo'lmasa ham qolgan hamma narsa ishlaydi.
+
+## Manba koddan o'rnatish
 
 ```bash
 git clone https://github.com/sanakulovme/jecbridge.git
@@ -15,45 +31,37 @@ npm install
 npm link        # ixtiyoriy: "jecbridge" buyrug'i hamma joyda ishlaydi
 ```
 
-## Windows'da o'rnatish
+## Windows
 
-PowerShell'ni oching:
+Node.js'ni (va xohlasangiz git'ni) bir marta PowerShell orqali o'rnating:
 
 ```powershell
 winget install OpenJS.NodeJS.LTS
-winget install Git.Git
-winget install BurntSushi.ripgrep.MSVC        # ixtiyoriy: tezroq qidiruv uchun
-winget install Cloudflare.cloudflared         # claude.ai / ChatGPT uchun
+winget install Git.Git        # ixtiyoriy: checkpoint va undo uchun
 ```
 
-O'rnatgandan keyin PowerShell'ni **yopib qayta oching**, shunda yangi buyruqlar PATH'ga tushadi. Keyin:
+PowerShell'ni yopib, qayta oching. Keyin:
 
 ```powershell
-git clone https://github.com/sanakulovme/jecbridge.git $HOME\jecbridge
-cd $HOME\jecbridge
-npm install
-npx jecbridge C:\Users\Abbos\projects\my-app --tunnel
+npx jecbridge $HOME\Desktop\my-app --tunnel
 ```
 
 Windows bo'yicha eslatmalar:
-- **Bo'sh joyli yo'llar.** Ularni qo'shtirnoqqa oling: `node src\cli.js "C:\My Projects\app" --tunnel`
+- **Bo'sh joyli yo'llar.** Ularni qo'shtirnoqqa oling: `npx jecbridge "C:\My Projects\app" --tunnel`
+- **JSON config'da npx.** Windows'da Claude Desktop `npx` ni to'g'ridan-to'g'ri topmasligi mumkin. Unda `"command": "cmd"` va `"args": ["/c", "npx", "-y", "jecbridge", ...]` yozing.
 - **JSON config.** Claude Desktop yoki Cursor config'ida `\` ikki marta yoziladi (`"C:\\Users\\Abbos\\my-app"`) yoki `/` ishlatiladi (`"C:/Users/Abbos/my-app"`).
 - **Windows Firewall.** So'rasa, *Private networks* uchun ruxsat bering. Server faqat `127.0.0.1` da tinglaydi, tashqariga faqat tunnel orqali chiqadi.
 - **CRLF fayllar.** Windows qator oxiri (CRLF) avtomatik qo'llab-quvvatlanadi: tahrir qilinganda fayl formati buzilmaydi.
 
-## 1. Web provayderlar (claude.ai, ChatGPT)
+## 1. Web provayderlar (claude.ai, ChatGPT, Gemini)
 
-Web AI sizning kompyuteringizni ko'ra olmaydi, shuning uchun tunnel kerak:
+Web AI sizning kompyuteringizni ko'ra olmaydi, shuning uchun JecBridge tunnel ochadi:
 
 ```bash
-brew install cloudflared                 # bir marta (Windows: winget install Cloudflare.cloudflared)
 npx jecbridge ~/projects/my-app --tunnel
 ```
 
-Terminal public URL chiqaradi: `https://xxxx.trycloudflare.com/mcp/<token>`
-
-- **claude.ai:** Settings → Connectors → *Add custom connector* → URL'ni qo'ying
-- **ChatGPT:** Settings → Apps & Connectors → *Developer mode* yoqing → *Create* → URL'ni qo'ying
+Terminal `https://xxxx.trycloudflare.com/mcp/<token>` ko'rinishidagi public URL chiqaradi va uni clipboard'ga nusxalaydi. cloudflared o'rnatilmagan bo'lsa, rasmiy dastur Cloudflare'ning GitHub sahifasidan bir marta `~/.jecbridge/bin` ga yuklab olinadi.
 
 > ⚠️ URL ichida maxfiy token bor, uni hech kimga bermang. Token `.jecbridge/token` faylida saqlanadi. Yangilash uchun shu faylni o'chiring.
 > Quick tunnel URL'i har ishga tushirishda o'zgaradi. Doimiy manzil uchun Cloudflare named tunnel yoki ngrok static domain ishlating.
@@ -66,8 +74,8 @@ Terminal public URL chiqaradi: `https://xxxx.trycloudflare.com/mcp/<token>`
 {
   "mcpServers": {
     "jecbridge": {
-      "command": "node",
-      "args": ["/TO'LIQ/YO'L/jecbridge/src/cli.js", "/TO'LIQ/YO'L/my-app", "--stdio"]
+      "command": "npx",
+      "args": ["-y", "jecbridge", "/TO'LIQ/YO'L/my-app", "--stdio"]
     }
   }
 }
@@ -76,16 +84,29 @@ Terminal public URL chiqaradi: `https://xxxx.trycloudflare.com/mcp/<token>`
 **Claude Code:**
 
 ```bash
-claude mcp add jecbridge -- node /path/jecbridge/src/cli.js /path/my-app --stdio
+claude mcp add jecbridge -- npx -y jecbridge /path/my-app --stdio
 ```
 
 ## 3. Noldan loyiha
 
 ```bash
-jecbridge ~/projects/yangi-loyiha --init --tunnel
+npx jecbridge ~/projects/yangi-loyiha --tunnel
 ```
 
 Keyin AI'ga yozing: *"Shu papkada Next.js + Tailwind landing page qur, `npm run build` bilan tekshir."*
+
+## Parametrlar
+
+| Parametr | Vazifasi |
+|---|---|
+| `--stdio` | stdio transport (Claude Desktop, Cursor, Claude Code) |
+| `--port <n>` | HTTP port (standart `8787`, band bo'lsa keyingi bo'sh port) |
+| `--host <h>` | HTTP host (standart `127.0.0.1`) |
+| `--tunnel` | Web AI'lar uchun public HTTPS URL (cloudflared avtomatik yuklab olinadi) |
+| `--token <t>` | Maxfiy token (standart: yaratiladi va saqlanadi; `JECBRIDGE_TOKEN` ham ishlaydi) |
+| `--read-only` | Yozish yo'q, buyruq yo'q, loyihaga hech narsa saqlanmaydi |
+| `--allow <a,b,c>` | Buyruqlar ro'yxatini almashtirish |
+| `--allow-all-commands` | Istalgan shell buyrug'iga ruxsat (ehtiyot bo'ling) |
 
 ## AI'ga beriladigan tool'lar
 
@@ -131,5 +152,9 @@ DeepSeek, Ollama, OpenAI API kabi oddiy API'lar uchun MCP klientli agent kerak. 
 ## Sinov
 
 ```bash
-npm test     # 20 ta e2e sinov: noldan qurish, tahrir, undo, xavfsizlik, stdio, read-only
+npm test     # 24 ta e2e sinov: noldan qurish, tahrir, undo, xavfsizlik, stdio, read-only, git'siz rejim
 ```
+
+## Litsenziya
+
+[MIT](LICENSE)

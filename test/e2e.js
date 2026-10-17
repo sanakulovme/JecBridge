@@ -3,15 +3,18 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import net from "node:net";
+import { spawn, spawnSync } from "node:child_process";
 import assert from "node:assert/strict";
+import { assetName } from "../src/tunnel.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
 const dir = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "cb-test-")), "my-app");
 const PORT = 8899, TOKEN = "test-token-123456";
-const srv = spawn(process.execPath, ["src/cli.js", dir, "--init", "--port", String(PORT), "--token", TOKEN], {
+const CLI = path.resolve("src/cli.js");
+const srv = spawn(process.execPath, [CLI, dir, "--port", String(PORT), "--token", TOKEN], {
   stdio: "pipe", env: { ...process.env, E2E_SECRET_TOKEN: "leaked-value" },
 });
 
@@ -173,6 +176,55 @@ try {
     assert.ok((await roCall("run_command", { command: "node --version" })).isError);
     await ro.close();
     assert.deepEqual(fs.readdirSync(roDir), ["a.txt"]);
+  });
+
+  await t("works without git: files and commands yes, undo reports it is off", async () => {
+    const ngDir = fs.mkdtempSync(path.join(os.tmpdir(), "cb-nogit-"));
+    const env = { PATH: "", SystemRoot: process.env.SystemRoot || "" }; // git can't be found
+    const ng = new Client({ name: "e2e-nogit", version: "1" });
+    await ng.connect(new StdioClientTransport({ command: process.execPath, args: [CLI, ngDir, "--stdio"], env, stderr: "ignore" }));
+    const ngCall = (name, args = {}) => ng.callTool({ name, arguments: args });
+    assert.match(text(await ngCall("project_info")), /"checkpoints": false/);
+    assert.ok(!(await ngCall("write_file", { path: "web/index.html", content: "<h1>hi</h1>" })).isError);
+    fs.mkdirSync(path.join(ngDir, "node_modules/x"), { recursive: true });
+    fs.writeFileSync(path.join(ngDir, "node_modules/x/i.js"), "");
+    fs.writeFileSync(path.join(ngDir, ".env"), "SECRET=1");
+    const listed = text(await ngCall("list_files"));
+    assert.match(listed, /web\/index\.html/);
+    assert.ok(!/node_modules|\.env/.test(listed), listed);
+    assert.match(text(await ngCall("search_code", { pattern: "hi" })), /web\/index\.html/);
+    const u = await ngCall("undo", { checkpoint_id: "abc" });
+    assert.ok(u.isError && /git is not installed/.test(text(u)), text(u));
+    await ng.close();
+  });
+
+  await t("no folder argument: serves the current folder; busy port moves to the next one", async () => {
+    const here = fs.mkdtempSync(path.join(os.tmpdir(), "cb-cwd-"));
+    const blocker = net.createServer().listen(8787, "127.0.0.1");
+    await new Promise((ok) => { blocker.on("listening", ok); blocker.on("error", ok); }); // already busy is fine too
+    const p = spawn(process.execPath, [CLI, "--token", TOKEN], { cwd: here, stdio: "pipe" });
+    let out = "";
+    try {
+      await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error("no banner:\n" + out)), 20_000);
+        const on = (d) => { out += d; if (/Local: +http/.test(out)) { clearTimeout(timer); resolve(); } };
+        p.stdout.on("data", on); p.stderr.on("data", on);
+      });
+      assert.ok(out.includes(fs.realpathSync(here)), out);
+      assert.match(out, /127\.0\.0\.1:(878[89]|879\d|880\d)\//, out);
+    } finally { p.kill(); blocker.close(); }
+  });
+
+  await t("refuses to serve the home folder by accident", async () => {
+    const r = spawnSync(process.execPath, [CLI, "--stdio"], { cwd: os.homedir(), encoding: "utf8" });
+    assert.equal(r.status, 1); assert.match(r.stderr, /Name a project folder/);
+  });
+
+  await t("cloudflared download picks the right file for each platform", async () => {
+    assert.equal(assetName("win32", "x64"), "cloudflared-windows-amd64.exe");
+    assert.equal(assetName("darwin", "arm64"), "cloudflared-darwin-arm64.tgz");
+    assert.equal(assetName("linux", "arm64"), "cloudflared-linux-arm64");
+    assert.equal(assetName("freebsd", "x64"), null);
   });
   console.log(`\n${passed} tests passed ✅`);
 } catch (e) {

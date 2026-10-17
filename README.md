@@ -4,9 +4,25 @@
 
 Connects **any code project** on your computer to **any AI** over MCP: claude.ai, ChatGPT, Claude Desktop, Cursor, Claude Code, VS Code. The AI can read the project, change it, run its tests or build it from scratch. A checkpoint is taken automatically before every change, so if the AI makes a mistake you roll back with one command.
 
-## Install
+## Quick start
 
-You need Node.js 22+ and git.
+The only requirement is [Node.js 22+](https://nodejs.org). Then one line:
+
+```bash
+npx jecbridge my-app --tunnel
+```
+
+That's it. The folder is created if it doesn't exist, the tunnel tool (cloudflared) is downloaded automatically the first time, and the connector URL is copied to your clipboard. Paste it into your AI:
+
+- **claude.ai:** Settings → Connectors → *Add custom connector*
+- **ChatGPT:** Settings → Apps & Connectors → *Developer mode* → *Create*
+- **Gemini:** Settings → Connected Apps → *Add a custom app*
+
+Then ask, for example: *"Build a calculator with HTML and CSS in this project."*
+
+> [git](https://git-scm.com) is optional but recommended: with it, every change gets an automatic checkpoint and can be undone. Without git, everything else works.
+
+## Install from source
 
 ```bash
 git clone https://github.com/sanakulovme/jecbridge.git
@@ -15,45 +31,37 @@ npm install
 npm link        # optional: makes the "jecbridge" command available everywhere
 ```
 
-## Installing on Windows
+## Windows
 
-Open PowerShell:
+Install Node.js (and optionally git) once, from PowerShell:
 
 ```powershell
 winget install OpenJS.NodeJS.LTS
-winget install Git.Git
-winget install BurntSushi.ripgrep.MSVC        # optional: faster search
-winget install Cloudflare.cloudflared         # for claude.ai / ChatGPT
+winget install Git.Git        # optional: enables checkpoints and undo
 ```
 
-After installing, **close and reopen PowerShell** so the new commands are on your PATH. Then:
+Close and reopen PowerShell, then:
 
 ```powershell
-git clone https://github.com/sanakulovme/jecbridge.git $HOME\jecbridge
-cd $HOME\jecbridge
-npm install
-npx jecbridge C:\Users\Abbos\projects\my-app --tunnel
+npx jecbridge $HOME\Desktop\my-app --tunnel
 ```
 
 Windows notes:
-- **Paths with spaces.** Put them in quotes: `node src\cli.js "C:\My Projects\app" --tunnel`
-- **JSON config.** In Claude Desktop or Cursor config, write `\` twice (`"C:\\Users\\Abbos\\my-app"`) or use `/` (`"C:/Users/Abbos/my-app"`).
+- **Paths with spaces.** Put them in quotes: `npx jecbridge "C:\My Projects\app" --tunnel`
+- **npx in JSON config.** Claude Desktop on Windows may not find `npx` directly; use `"command": "cmd"` with `"args": ["/c", "npx", "-y", "jecbridge", ...]`.
+- **JSON config.** In Claude Desktop or Cursor config, write `\` twice (`"C:\Users\Abbos\my-app"`) or use `/` (`"C:/Users/Abbos/my-app"`).
 - **Windows Firewall.** If asked, allow *Private networks*. The server only listens on `127.0.0.1` and is reachable from outside only through the tunnel.
 - **CRLF files.** Windows line endings (CRLF) are handled automatically: edits don't break the file format.
 
-## 1. Web AIs (claude.ai, ChatGPT)
+## 1. Web AIs (claude.ai, ChatGPT, Gemini)
 
-A web AI can't see your computer, so you need a tunnel:
+A web AI can't see your computer, so JecBridge opens a tunnel:
 
 ```bash
-brew install cloudflared                 # once (Windows: winget install Cloudflare.cloudflared)
 npx jecbridge ~/projects/my-app --tunnel
 ```
 
-The terminal prints a public URL: `https://xxxx.trycloudflare.com/mcp/<token>`
-
-- **claude.ai:** Settings → Connectors → *Add custom connector* → paste the URL
-- **ChatGPT:** Settings → Apps & Connectors → turn on *Developer mode* → *Create* → paste the URL
+The terminal prints a public URL like `https://xxxx.trycloudflare.com/mcp/<token>` and copies it to the clipboard. If cloudflared isn't installed, the official binary is downloaded once from Cloudflare's GitHub releases into `~/.jecbridge/bin`.
 
 > ⚠️ The URL contains a secret token, never share it. The token is stored in `.jecbridge/token`; delete that file to get a new one.
 > A quick tunnel URL changes on every start. For a permanent address, use a Cloudflare named tunnel or an ngrok static domain.
@@ -66,8 +74,8 @@ The terminal prints a public URL: `https://xxxx.trycloudflare.com/mcp/<token>`
 {
   "mcpServers": {
     "jecbridge": {
-      "command": "node",
-      "args": ["/FULL/PATH/jecbridge/src/cli.js", "/FULL/PATH/my-app", "--stdio"]
+      "command": "npx",
+      "args": ["-y", "jecbridge", "/FULL/PATH/my-app", "--stdio"]
     }
   }
 }
@@ -76,13 +84,13 @@ The terminal prints a public URL: `https://xxxx.trycloudflare.com/mcp/<token>`
 **Claude Code:**
 
 ```bash
-claude mcp add jecbridge -- node /path/jecbridge/src/cli.js /path/my-app --stdio
+claude mcp add jecbridge -- npx -y jecbridge /path/my-app --stdio
 ```
 
 ## 3. A new project from scratch
 
 ```bash
-jecbridge ~/projects/new-project --init --tunnel
+npx jecbridge ~/projects/new-project --tunnel
 ```
 
 Then tell the AI: *"Build a Next.js + Tailwind landing page in this folder and check it with `npm run build`."*
@@ -92,14 +100,13 @@ Then tell the AI: *"Build a Next.js + Tailwind landing page in this folder and c
 | Option | What it does |
 |---|---|
 | `--stdio` | stdio transport (Claude Desktop, Cursor, Claude Code) |
-| `--port <n>` | HTTP port (default `8787`) |
+| `--port <n>` | HTTP port (default `8787`, or the next free one) |
 | `--host <h>` | HTTP host (default `127.0.0.1`) |
-| `--tunnel` | Open a Cloudflare quick tunnel (public URL for ChatGPT, claude.ai) |
+| `--tunnel` | Public HTTPS URL for web AIs (cloudflared is downloaded automatically) |
 | `--token <t>` | Secret token (default: generated and saved; also `JECBRIDGE_TOKEN`) |
 | `--read-only` | No writes, no commands, nothing saved in the project |
 | `--allow <a,b,c>` | Replace the command allowlist |
 | `--allow-all-commands` | Allow any shell command (use with care) |
-| `--init` | Create the folder if it doesn't exist |
 
 ## Tools the AI gets
 
@@ -145,7 +152,7 @@ Plain APIs like DeepSeek, Ollama or the OpenAI API need an agent with an MCP cli
 ## Tests
 
 ```bash
-npm test     # 20 end-to-end tests: build from scratch, edit, undo, security, stdio, read-only
+npm test     # 24 end-to-end tests: build from scratch, edit, undo, security, stdio, read-only, no-git
 ```
 
 ## License
