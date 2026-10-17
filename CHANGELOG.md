@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.1 — 2026-10-17
+
+- Logo in the README (npm and GitHub)
+
 ## 0.2.0 — 2026-10-17
 
 - New tools for long-running commands: `start_process` runs a dev server or watcher in the background and returns its local URL, `process_output` shows its logs, `stop_process` stops it with all child processes
