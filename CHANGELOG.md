@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.7.0 — 2026-10-18
+
+Skills: the same SKILL.md format as Claude Code, for any AI.
+
+- Skills are discovered from the project (`.claude/skills`, `.agents/skills`), the user (`~/.jecbridge/skills`) and JecBridge itself; project beats user beats built-in on a name clash
+- The AI gets each skill's name and description in the server instructions and `project_info`, and is told to use a matching skill before starting a task
+- New tools: `use_skill` (instructions or one of the skill's files, jailed to the skill folder) and `run_skill_script` (interpreter must be on the allowlist, arguments stay in the project)
+- Every skill is also an MCP prompt (`skill-<name>`) for clients with a prompt menu
+- `jecbridge skills list | add <source> | remove <name>` with `--project`; sources: GitHub (`owner/repo/path` or a github.com URL) or a local folder; a repo with several skills installs them all
+- Built-in skills: `web-app-qa`, `vite-react-app`, `static-site`
+
 ## 0.6.1 — 2026-10-18
 
 - Logo readable on the npm page in dark mode: npm shows only one image, so it now gets a logo on its own dark badge (GitHub still switches light/dark logos)

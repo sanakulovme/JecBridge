@@ -370,7 +370,27 @@ export class Workspace {
   }
 
   run(command, { cwd = ".", timeoutSec = 120 } = {}) {
-    const child = this.#spawn(command, cwd);
+    return this.#collect(this.#spawn(command, cwd), timeoutSec);
+  }
+
+  // Run a script that ships inside a skill (outside the project). The script itself is trusted because
+  // the user installed the skill; its interpreter must be allowed and its arguments stay in the jail.
+  runScript(scriptAbs, args = [], { cwd = ".", timeoutSec = 120, interpreter } = {}) {
+    if (this.readOnly) throw new Error("Server is running in read-only mode");
+    if (!interpreter) throw new Error(`Don't know how to run ${path.basename(scriptAbs)}: use .js, .py, .sh, .ps1, .rb or .ts`);
+    if (!this.allowAllCommands && !this.allowed.has(interpreter)) {
+      throw new Error(`"${interpreter}" is not in the command allowlist, so this skill script can't run. Allowed: ${[...this.allowed].join(", ")}`);
+    }
+    const { abs: cwdAbs } = this.resolve(cwd);
+    if (!this.allowAllCommands) this.#checkArgs(args, cwdAbs);
+    const pre = interpreter === "npx" ? ["tsx"] : interpreter === "powershell" ? ["-NoProfile", "-File"] : [];
+    const child = crossSpawn(interpreter, [...pre, scriptAbs, ...args],
+      { cwd: cwdAbs, env: this.#childEnv(), windowsHide: true, detached: process.platform !== "win32" });
+    running.add(child);
+    return this.#collect(child, timeoutSec);
+  }
+
+  #collect(child, timeoutSec) {
     return new Promise((resolve) => {
       let out = ""; const cap = 60_000;
       const add = (d) => { if (out.length < cap) out += d.toString(); };

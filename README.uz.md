@@ -132,6 +132,7 @@ Keyin AI'ga yozing: *"Shu papkada Next.js + Tailwind landing page qur, `npm run 
 | `process_output`, `stop_process` | Fon jarayonining loglarini ko'rish (xatolar `problems` ga yig'iladi), to'xtatish |
 | `check_page` | Sahifani headless brauzerda ochish: skrinshot, console xatolari, muvaffaqiyatsiz so'rovlar; bosish va yozish orqali sinash. Dev server va oddiy HTML fayllar uchun ishlaydi |
 | `http_get` | O'zi ishga tushirgan dev server sahifasi yoki API'sini tekshirish (faqat `start_process` portlari) |
+| `use_skill`, `run_skill_script` | Skill qo'llanmasi yoki fayllarini yuklash, u bilan kelgan skriptni ishga tushirish |
 | `task_plan` | Ko'p bosqichli ish uchun ro'yxat: AI ish tugamasdan "tayyor" demasligi uchun |
 | `checkpoint`, `list_checkpoints` | Holatni saqlash va ko'rish |
 | `diff` | Checkpointdan beri nima o'zgargani |
@@ -171,6 +172,41 @@ Undo nimani tiklaydi va nimani tiklamaydi:
 | | Loyiha papkasidan tashqaridagi hamma narsa |
 
 Bu "bitta o'zgarishni bekor qilish" emas, "nuqtaga qaytish": tanlangan checkpoint'dan keyingi hamma narsa qaytariladi.
+
+## Skill'lar
+
+Skill — `SKILL.md` faylli papka. Unda muayyan turdagi ish uchun bosqichma-bosqich qo'llanma bo'ladi, yonida ixtiyoriy skriptlar va ma'lumot fayllari. JecBridge **Claude Code bilan bir xil formatdan** foydalanadi. Shuning uchun mavjud skill'lar o'zgartirishsiz ishlaydi, ulardan Gemini, ChatGPT va claude.ai kabi web AI'lar ham foydalana oladi.
+
+AI har bir skill'ning nomi va tavsifini ko'radi. Vazifa mos kelsa, `use_skill` bilan to'liq qo'llanmani yuklaydi, skill fayllarini o'qiydi va uning skriptlarini `run_skill_script` bilan ishga tushiradi.
+
+```bash
+npx jecbridge skills list                                   # bu yerda AI ishlata oladigan skill'lar
+npx jecbridge skills add anthropics/skills/skills/webapp-testing
+npx jecbridge skills add https://github.com/owner/repo/tree/main/skills/my-skill
+npx jecbridge skills add ./my-skill                         # papkadan
+npx jecbridge skills add ./my-skill --project               # shu loyihaning .claude/skills papkasiga
+npx jecbridge skills remove webapp-testing
+```
+
+Skill'lar qayerdan olinadi. Bir xil nomli skill'lar orasida loyiha skill'i sizniki ustidan, sizniki esa ichki skill ustidan ustun turadi:
+
+| Manba | Papka |
+|---|---|
+| Loyiha | `.claude/skills/<nom>/` yoki `.agents/skills/<nom>/` (loyiha bilan commit qilinadi) |
+| Siz | `~/.jecbridge/skills/<nom>/` (`skills add` shu yerga o'rnatadi; barcha loyihalarda ishlaydi) |
+| Ichki | `web-app-qa`, `vite-react-app`, `static-site` JecBridge bilan birga keladi |
+
+Eng oddiy skill:
+
+```markdown
+---
+name: house-style
+description: Our colors, fonts and component rules. Use when building or restyling any page.
+---
+Use #2563EB as the primary color and Inter for text. Buttons are 40px tall with 8px corners.
+```
+
+> Skill — bu AI'ga berilgan ko'rsatma, shuning uchun unga kodga qaragandek qarang: faqat ishonchli manbalardan o'rnating. Skill skriptlari faqat `run_skill_script` orqali ishga tushadi. Ularning interpretatori buyruqlar allowlist'ida bo'lishi kerak, argumentlari esa loyiha papkasidan chiqa olmaydi.
 
 ## AI nimani ko'radi va u qayerga ketadi
 
@@ -249,7 +285,7 @@ DeepSeek, Ollama, OpenAI API kabi oddiy API'lar uchun MCP klientli agent kerak. 
 ## Sinov
 
 ```bash
-npm test     # 42 ta e2e sinov: noldan qurish, tahrir, undo, xavfsizlik, dev server, stdio, read-only, git'siz rejim
+npm test     # 44 ta e2e sinov: noldan qurish, tahrir, undo, xavfsizlik, dev server, stdio, read-only, git'siz rejim
 ```
 
 ## Litsenziya

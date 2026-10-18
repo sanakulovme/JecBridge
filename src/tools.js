@@ -5,6 +5,7 @@ import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { VERSION } from "./version.js";
 import { checkPage } from "./browser.js";
+import { discoverSkills, skillFiles, resolveSkillFile, isScript, interpreterFor } from "./skills.js";
 
 // How the AI must work, the way a coding agent like Claude Code does. Sent as server
 // instructions and repeated in project_info, because some clients ignore instructions.
@@ -34,6 +35,15 @@ const safe = (fn) => async (args) => { try { return await fn(args); } catch (e) 
 const MAX_READ = 400_000;
 
 export function createServer(ws, log = () => {}) {
+  // Skills are looked up per server, so newly installed ones show up without a restart
+  const skills = discoverSkills(ws.root, (p) => ws.isDenied(p));
+  const findSkill = (name) => {
+    const s = skills.find((x) => x.name.toLowerCase() === String(name).toLowerCase());
+    if (!s) throw new Error(`No skill "${name}". Available: ${skills.map((x) => x.name).join(", ") || "none"}`);
+    return s;
+  };
+  const skillList = skills.slice(0, 40).map((s) => `- ${s.name}: ${s.description.length > 200 ? s.description.slice(0, 197) + "..." : s.description}`).join("\n");
+
   const server = new McpServer(
     { name: "jecbridge", version: VERSION },
     {
@@ -45,7 +55,11 @@ export function createServer(ws, log = () => {}) {
         (ws.hasGit
           ? "A checkpoint is taken automatically before every change; if something goes wrong, use list_checkpoints + undo. "
           : "Checkpoints and undo are OFF (git is not installed), so be careful with destructive changes. ") +
-        "Reply to the user in their own language.",
+        "Reply to the user in their own language." +
+        (skills.length
+          ? "\n\nSkills: step-by-step know-how for specific tasks. Before you start a task, check this list; " +
+            "if a skill matches, call use_skill with its name and follow it.\n" + skillList
+          : ""),
     },
   );
 
@@ -87,6 +101,7 @@ export function createServer(ws, log = () => {}) {
       ...(ws.denyPatterns.length ? { hiddenByUser: ws.denyPatterns } : {}),
       keyFiles: found,
       ...(ws.plan ? { taskPlan: ws.plan } : {}),
+      skills: skills.map((s) => ({ name: s.name, description: s.description, source: s.source })),
       workingRules: WORKING_RULES,
     });
   }));
@@ -373,6 +388,61 @@ export function createServer(ws, log = () => {}) {
     inputSchema: { checkpoint_id: z.string() },
     annotations: destructive,
   }, safe(async ({ checkpoint_id }) => { log("undo", checkpoint_id); return ok(ws.restore(checkpoint_id)); }));
+
+  // ---------- skills ----------
+  server.registerTool("use_skill", {
+    title: "Use a skill",
+    description: "Load a skill: step-by-step instructions for a kind of task (see the skills list in the server instructions or project_info). " +
+      "Call it before starting a matching task and follow what it says. With file, read one of the skill's reference files instead.",
+    inputSchema: {
+      name: z.string().describe("Skill name"),
+      file: z.string().optional().describe("A file inside the skill, e.g. reference/forms.md"),
+    },
+    annotations: ro,
+  }, safe(async ({ name, file }) => {
+    const skill = findSkill(name);
+    log("use_skill", skill.name, file || "");
+    if (file) {
+      const text = fs.readFileSync(resolveSkillFile(skill, file), "utf8");
+      return ok(`${skill.name}/${file}\n\n${text.length > MAX_READ ? text.slice(0, MAX_READ) + "\n[...truncated]" : text}`);
+    }
+    const files = skillFiles(skill).filter((f) => f !== "SKILL.md");
+    const scripts = files.filter(isScript);
+    return ok(`# Skill: ${skill.name} (${skill.source})\n\n${skill.body}\n\n` +
+      (files.length ? `---\nFiles in this skill: ${files.join(", ")}\nRead one with use_skill { name: "${skill.name}", file }.` +
+        (scripts.length ? ` Run a script with run_skill_script { name: "${skill.name}", script, args }.` : "") : ""));
+  }));
+
+  server.registerTool("run_skill_script", {
+    title: "Run a skill's script",
+    description: "Run a script that ships with a skill (e.g. scripts/check.py) in the project folder. " +
+      "The interpreter (node, python, …) must be on the command allowlist; arguments follow the same rules as run_command.",
+    inputSchema: {
+      name: z.string().describe("Skill name"),
+      script: z.string().describe("Path of the script inside the skill"),
+      args: z.array(z.string()).max(50).default([]),
+      cwd: z.string().default("."),
+      timeout_sec: z.number().int().min(1).max(900).default(120),
+    },
+    annotations: destructive,
+  }, mutate("run_skill_script", async ({ name, script, args, cwd, timeout_sec }) => {
+    const skill = findSkill(name);
+    const abs = resolveSkillFile(skill, script);
+    const r = await ws.runScript(abs, args, { cwd, timeoutSec: timeout_sec, interpreter: interpreterFor(abs) });
+    const next = r.exitCode === 0 ? "" : "\n\nNext: the script failed. Read the output, fix the cause and run it again yourself.";
+    return { ...ok(`exit code: ${r.exitCode}\n${r.output || "(no output)"}${next}`), isError: r.exitCode !== 0 };
+  }));
+
+  // Clients with a prompt menu (e.g. Claude Desktop) show every skill as a ready-made prompt
+  for (const skill of skills) {
+    server.registerPrompt(`skill-${skill.name.replace(/[^\w-]+/g, "-")}`, {
+      title: `Skill: ${skill.name}`,
+      description: skill.description,
+    }, () => ({
+      messages: [{ role: "user", content: { type: "text",
+        text: `Use the "${skill.name}" skill for this task. Call use_skill with name "${skill.name}" and follow it.` } }],
+    }));
+  }
 
   return server;
 }

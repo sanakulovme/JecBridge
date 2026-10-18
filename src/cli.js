@@ -12,6 +12,7 @@ import { Workspace, IGNORE_FILE } from "./workspace.js";
 import { createServer } from "./tools.js";
 import { VERSION } from "./version.js";
 import { startTunnel, copyToClipboard } from "./tunnel.js";
+import { discoverSkills, installSkills, removeSkill, userSkillsDir, PROJECT_SKILL_DIRS } from "./skills.js";
 
 const HELP = `
 JecBridge — connect a local project to any AI over MCP
@@ -23,6 +24,12 @@ Usage:
 
 Quick start (claude.ai, ChatGPT, Gemini):
   npx jecbridge my-app --tunnel
+
+Skills (SKILL.md, same format as Claude Code):
+  jecbridge skills list                    skills the AI can use here
+  jecbridge skills add <source>            from GitHub (owner/repo/path or URL) or a folder
+  jecbridge skills remove <name>
+  add --project to install into this project's .claude/skills
 
 Options:
   --stdio                 stdio transport (Claude Desktop, Cursor, Claude Code)
@@ -80,6 +87,46 @@ function parseArgs(argv) {
     else usageError(`Unknown option: ${a}`);
   }
   return o;
+}
+
+if (process.argv[2] === "skills") { await skillsCommand(process.argv.slice(3)); process.exit(0); }
+
+// jecbridge skills [list | add <source> | remove <name>] [--project]
+async function skillsCommand([sub = "list", ...rest]) {
+  const project = rest.includes("--project");
+  const args = rest.filter((a) => a !== "--project");
+  const dest = project ? path.resolve(PROJECT_SKILL_DIRS[0]) : userSkillsDir();
+  const where = project ? `this project (${PROJECT_SKILL_DIRS[0]})` : `your skills folder (${userSkillsDir()})`;
+  try {
+    if (sub === "list") {
+      const skills = discoverSkills(process.cwd());
+      if (!skills.length) return console.log("No skills yet. Add one: jecbridge skills add <github owner/repo/path | folder>");
+      console.log(`Skills the AI can use in ${process.cwd()}:\n`);
+      for (const s of skills) console.log(`  ${s.name.padEnd(24)} ${`[${s.source}]`.padEnd(12)} ${s.description.slice(0, 90)}${s.description.length > 90 ? "…" : ""}`);
+      return;
+    }
+    if (sub === "add") {
+      if (!args[0]) throw new Error("usage: jecbridge skills add <github owner/repo/path | https://github.com/... | folder> [--project]");
+      const installed = await installSkills(args[0], { destRoot: dest, log: (m) => console.log(m) });
+      if (!installed.length) throw new Error("nothing was installed");
+      for (const s of installed) {
+        console.log(`\n+ ${s.updated ? "updated" : "installed"} ${s.name}: ${s.description.slice(0, 120)}${s.description.length > 120 ? "…" : ""}`);
+        console.log(`  ${s.files} file(s) in ${s.dir}`);
+        if (s.scripts.length) console.log(`  Scripts: ${s.scripts.join(", ")} (they run only when the AI calls run_skill_script, under your command allowlist)`);
+      }
+      console.log(`\nInstalled into ${where}. A skill is instructions for the AI: only install skills from sources you trust.`);
+      return;
+    }
+    if (sub === "remove") {
+      if (!args[0]) throw new Error("usage: jecbridge skills remove <name> [--project]");
+      if (!removeSkill(args[0], dest)) throw new Error(`no skill "${args[0]}" in ${where}`);
+      return console.log(`Removed ${args[0]} from ${where}.`);
+    }
+    throw new Error(`unknown command "skills ${sub}". Use: skills list | skills add <source> | skills remove <name>`);
+  } catch (e) {
+    console.error(`Error: ${e.message}`);
+    process.exit(1);
+  }
 }
 
 const opts = parseArgs(process.argv.slice(2));

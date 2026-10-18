@@ -132,6 +132,7 @@ Then tell the AI: *"Build a Next.js + Tailwind landing page in this folder and c
 | `process_output`, `stop_process` | Read a background process's logs (errors are collected under `problems`), stop it |
 | `check_page` | Open a page in a headless browser: screenshot, console errors, failed requests; click and type to test it. Works for dev servers and plain HTML files |
 | `http_get` | Check a page or API of its own dev server (only ports started with `start_process`) |
+| `use_skill`, `run_skill_script` | Load a skill's instructions or files, run a script that ships with it |
 | `task_plan` | A checklist for multi-step work, so the AI doesn't report "done" too early |
 | `checkpoint`, `list_checkpoints` | Save and list project states |
 | `diff` | What changed since a checkpoint |
@@ -171,6 +172,41 @@ What undo covers and what it doesn't:
 | | Anything outside the project folder |
 
 It is "restore to a point", not "revert one change": everything after the checkpoint you pick is rolled back.
+
+## Skills
+
+Skills are folders with a `SKILL.md`: step-by-step know-how for a kind of task, plus optional scripts and reference files. JecBridge uses **the same format as Claude Code**, so existing skills work as-is, and web AIs like Gemini, ChatGPT and claude.ai can use them too.
+
+The AI sees each skill's name and description. When a task matches, it loads the full instructions with `use_skill`, reads the skill's files and runs its scripts with `run_skill_script`.
+
+```bash
+npx jecbridge skills list                                   # skills the AI can use here
+npx jecbridge skills add anthropics/skills/skills/webapp-testing
+npx jecbridge skills add https://github.com/owner/repo/tree/main/skills/my-skill
+npx jecbridge skills add ./my-skill                         # from a folder
+npx jecbridge skills add ./my-skill --project               # into this project's .claude/skills
+npx jecbridge skills remove webapp-testing
+```
+
+Where skills come from (a project skill overrides a user skill of the same name, which overrides a built-in one):
+
+| Source | Folder |
+|---|---|
+| Project | `.claude/skills/<name>/` or `.agents/skills/<name>/` (commit them with the project) |
+| You | `~/.jecbridge/skills/<name>/` (what `skills add` installs; available in every project) |
+| Built-in | `web-app-qa`, `vite-react-app`, `static-site` ship with JecBridge |
+
+A minimal skill:
+
+```markdown
+---
+name: house-style
+description: Our colors, fonts and component rules. Use when building or restyling any page.
+---
+Use #2563EB as the primary color and Inter for text. Buttons are 40px tall with 8px corners.
+```
+
+> A skill is instructions for the AI, so treat it like code: install skills only from sources you trust. Skill scripts run only through `run_skill_script`, their interpreter must be on the command allowlist, and their arguments stay inside the project.
 
 ## What the AI sees, and where it goes
 
@@ -249,7 +285,7 @@ Plain APIs like DeepSeek, Ollama or the OpenAI API need an agent with an MCP cli
 ## Tests
 
 ```bash
-npm test     # 42 end-to-end tests: build from scratch, edit, undo, security, dev servers, stdio, read-only, no-git
+npm test     # 44 end-to-end tests: build from scratch, edit, undo, security, dev servers, stdio, read-only, no-git
 ```
 
 ## License

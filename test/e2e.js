@@ -9,6 +9,7 @@ import assert from "node:assert/strict";
 import { assetName } from "../src/tunnel.js";
 import { cftPlatform } from "../src/browser.js";
 import { patternToRegex } from "../src/workspace.js";
+import { parseFrontmatter, parseGithubSource } from "../src/skills.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -68,7 +69,7 @@ try {
 
   await t("lists all tools", async () => {
     const { tools } = await client.listTools();
-    assert.equal(tools.length, 19, tools.map((x) => x.name).join(", "));
+    assert.equal(tools.length, 21, tools.map((x) => x.name).join(", "));
   });
 
   await t("detects an empty project", async () => {
@@ -502,6 +503,73 @@ try {
     fs.writeFileSync(path.join(wDir, ".jecbridgeignore"), "*.csv\n");
     err = run();
     assert.ok(err.includes("dump.sql") && !err.includes("export.csv"), err);
+  });
+
+  await t("SKILL.md frontmatter and GitHub sources are parsed like other agents do", async () => {
+    const { meta, body } = parseFrontmatter("---\nname: pdf\ndescription: >\n  Fill and merge\n  PDF forms\nlicense: 'MIT'\n---\n# PDF\nSteps");
+    assert.deepEqual(meta, { name: "pdf", description: "Fill and merge PDF forms", license: "MIT" });
+    assert.equal(body, "# PDF\nSteps");
+    assert.deepEqual(parseGithubSource("anthropics/skills/skills/pdf"), { owner: "anthropics", repo: "skills", ref: "HEAD", sub: "skills/pdf" });
+    assert.deepEqual(parseGithubSource("https://github.com/anthropics/skills/tree/main/skills/pdf"), { owner: "anthropics", repo: "skills", ref: "main", sub: "skills/pdf" });
+    assert.deepEqual(parseGithubSource("https://github.com/o/r.git"), { owner: "o", repo: "r", ref: "HEAD", sub: "" });
+    assert.equal(parseGithubSource("not a source"), null);
+  });
+
+  await t("skills: install, discover (project > user > built-in), use, read files, run scripts, remove", async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "cb-skhome-"));
+    const env = { ...process.env, JECBRIDGE_HOME: home };
+    // A skill in a local folder, with a folded description, a reference file and a script
+    const src = fs.mkdtempSync(path.join(os.tmpdir(), "cb-sksrc-"));
+    fs.mkdirSync(path.join(src, "hello/scripts"), { recursive: true });
+    fs.mkdirSync(path.join(src, "hello/ref"), { recursive: true });
+    fs.writeFileSync(path.join(src, "hello/SKILL.md"), "---\nname: hello\ndescription: >\n  Greet people\n  politely\n---\nAlways run scripts/greet.mjs first.\n");
+    fs.writeFileSync(path.join(src, "hello/ref/notes.md"), "NOTES_CONTENT");
+    fs.writeFileSync(path.join(src, "hello/scripts/greet.mjs"),
+      'import path from "node:path";\nconsole.log("hello " + process.argv[2] + " from " + path.basename(process.cwd()));\n');
+
+    const add = spawnSync(process.execPath, [CLI, "skills", "add", src], { env, encoding: "utf8" });
+    assert.equal(add.status, 0, add.stderr);
+    assert.match(add.stdout, /\+ installed hello: Greet people politely/);
+    assert.match(add.stdout, /Scripts: scripts\/greet\.mjs/);
+
+    // The project overrides a built-in skill with its own version
+    const proj = fs.mkdtempSync(path.join(os.tmpdir(), "cb-skproj-"));
+    fs.mkdirSync(path.join(proj, ".claude/skills/static-site"), { recursive: true });
+    fs.writeFileSync(path.join(proj, ".claude/skills/static-site/SKILL.md"), "---\nname: static-site\ndescription: Our house style for static pages\n---\nUse our colors.\n");
+
+    const c = new Client({ name: "e2e-skills", version: "1" });
+    await c.connect(new StdioClientTransport({ command: process.execPath, args: [CLI, proj, "--stdio"], env, stderr: "ignore" }));
+    const sk = (name, args = {}) => c.callTool({ name, arguments: args });
+    try {
+      const instr = c.getInstructions();
+      assert.match(instr, /if a skill matches, call use_skill/);
+      assert.match(instr, /- hello: Greet people politely/);
+      const listed = json(await sk("project_info")).skills;
+      const by = Object.fromEntries(listed.map((s) => [s.name, s.source]));
+      assert.deepEqual([by.hello, by["static-site"], by["web-app-qa"], by["vite-react-app"]], ["user", "project", "built-in", "built-in"]);
+      assert.equal(listed.find((s) => s.name === "static-site").description, "Our house style for static pages");
+
+      const used = text(await sk("use_skill", { name: "Hello" }));
+      assert.match(used, /# Skill: hello \(user\)/); assert.match(used, /Always run scripts\/greet\.mjs first/);
+      assert.match(used, /Files in this skill: ref\/notes\.md, scripts\/greet\.mjs/); assert.match(used, /run_skill_script/);
+      assert.match(text(await sk("use_skill", { name: "hello", file: "ref/notes.md" })), /NOTES_CONTENT/);
+      for (const f of ["../../outside.txt", "SKILL.md/../../x"]) assert.ok((await sk("use_skill", { name: "hello", file: f })).isError, f);
+      const missing = await sk("use_skill", { name: "nope" });
+      assert.ok(missing.isError && /Available: .*hello/.test(text(missing)));
+
+      const ran = await sk("run_skill_script", { name: "hello", script: "scripts/greet.mjs", args: ["world"] });
+      assert.ok(!ran.isError, text(ran)); assert.match(text(ran), new RegExp(`hello world from ${path.basename(proj)}`));
+      assert.ok((await sk("run_skill_script", { name: "hello", script: "scripts/greet.mjs", args: ["../outside.txt"] })).isError);
+      assert.ok((await sk("run_skill_script", { name: "hello", script: "ref/notes.md" })).isError);
+
+      const { prompts } = await c.listPrompts();
+      assert.ok(prompts.some((p) => p.name === "skill-hello" && p.description === "Greet people politely"));
+    } finally { await c.close(); }
+
+    const rm = spawnSync(process.execPath, [CLI, "skills", "remove", "hello"], { env, encoding: "utf8" });
+    assert.equal(rm.status, 0, rm.stderr);
+    const list = spawnSync(process.execPath, [CLI, "skills", "list"], { env, cwd: proj, encoding: "utf8" }).stdout;
+    assert.ok(!list.includes("hello") && /static-site +\[project\]/.test(list), list);
   });
 
   await t("--new-token replaces the saved token", async () => {
