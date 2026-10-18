@@ -52,11 +52,19 @@ try {
 
   await t("lists all tools", async () => {
     const { tools } = await client.listTools();
-    assert.equal(tools.length, 16, tools.map((x) => x.name).join(", "));
+    assert.equal(tools.length, 18, tools.map((x) => x.name).join(", "));
   });
 
   await t("detects an empty project", async () => {
     assert.match(text(await call("project_info")), /"empty": true/);
+  });
+
+  await t("the AI is told to work like Claude Code (instructions and project_info)", async () => {
+    const instructions = client.getInstructions();
+    for (const rule of [/Never ask the user to copy, paste/, /Never paste file contents into the chat/, /fix the cause and run it again/, /Never say the work is done/, /Reply with the result/]) {
+      assert.match(instructions, rule);
+    }
+    assert.ok(json(await call("project_info")).workingRules.some((r) => /Never ask the user/.test(r)));
   });
 
   await t("builds a project from scratch", async () => {
@@ -79,8 +87,16 @@ try {
     assert.match(text(await call("search_code", { pattern: "a - b" })), /src\/math\.js:1/);
   });
 
-  await t("failing command is reported as an error", async () => {
-    assert.ok((await call("run_command", { command: "npm test" })).isError);
+  await t("failing command is reported as an error, with 'fix it yourself' guidance", async () => {
+    const r = await call("run_command", { command: "npm test" });
+    assert.ok(r.isError && /fix the cause and run it again yourself/.test(text(r)), text(r));
+  });
+
+  await t("errors tell the AI what to do next: fix it, or respect the safety rule", async () => {
+    const missing = await call("edit_file", { path: "nope.txt", edits: [{ old_text: "a", new_text: "b" }] });
+    assert.match(text(missing), /Fix the cause and try again yourself/);
+    const blocked = await call("read_file", { path: "../outside.txt" });
+    assert.match(text(blocked), /safety rule, not a bug: don't try to bypass it/);
   });
 
   await t("diff shows the changes", async () => {
@@ -230,7 +246,18 @@ try {
     const info = json(r);
     assert.ok(!r.isError && info.running, text(r));
     assert.match(info.url, /^http:\/\/localhost:\d+\/$/);
+    assert.match(info.next, /Check it with http_get/);
     assert.equal(await reachable(info.url), "dev ok");
+
+    // The AI can verify its own dev server (localhost falls back to 127.0.0.1, where it listens)
+    const page = json(await call("http_get", { url: info.url }));
+    assert.equal(page.status, 200); assert.equal(page.body, "dev ok");
+
+    // ...but nothing else on the machine: not JecBridge itself, not other ports or hosts
+    for (const url of [`http://127.0.0.1:${PORT}/`, "http://localhost:1/", "https://example.com/", "file:///etc/passwd"]) {
+      const r = await call("http_get", { url });
+      assert.ok(r.isError && /only reaches dev servers started with start_process/.test(text(r)), `${url}: ${text(r)}`);
+    }
 
     const out = json(await call("process_output", { id: info.id }));
     assert.ok(out.running && out.output.includes("Local:") && !out.output.includes("\x1b"), out.output);
@@ -239,6 +266,21 @@ try {
     const stopped = json(await call("stop_process", { id: info.id }));
     assert.equal(stopped.running, false);
     assert.equal(await reachable(info.url), null);
+    assert.ok((await call("http_get", { url: info.url })).isError, "a stopped server's port must not stay reachable");
+  });
+
+  await t("task_plan keeps the AI from reporting 'done' while items are open", async () => {
+    const open = text(await call("task_plan", { items: [
+      { title: "Create the page", status: "done" },
+      { title: "Start and check the dev server", status: "in_progress" },
+    ] }));
+    assert.match(open, /1\/2 done/); assert.match(open, /Don't report the work as finished yet/);
+    const done = text(await call("task_plan", { items: [
+      { title: "Create the page", status: "done" },
+      { title: "Start and check the dev server", status: "done" },
+    ] }));
+    assert.match(done, /All 2 items are done/);
+    assert.equal(json(await call("project_info")).taskPlan.length, 2);
   });
 
   await t("a background process that crashes reports its exit code and output", async () => {
@@ -246,6 +288,7 @@ try {
     const r = await call("start_process", { command: "node crash.mjs" });
     const info = json(r);
     assert.ok(r.isError && !info.running && info.exitCode === 3 && info.output.includes("boom"), text(r));
+    assert.match(info.next, /crashed\. Read its output, fix the cause and start it again yourself/);
   });
 
   await t("start_process follows the same safety rules as run_command", async () => {

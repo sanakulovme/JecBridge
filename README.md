@@ -128,9 +128,23 @@ Then tell the AI: *"Build a Next.js + Tailwind landing page in this folder and c
 | `run_command` | `npm install`, `npm test`, `python main.py`… |
 | `start_process` | Run a dev server or watcher in the background (`npm run dev`) and get its URL |
 | `process_output`, `stop_process` | Read a background process's logs, stop it |
+| `http_get` | Check a page or API of its own dev server (only ports started with `start_process`) |
+| `task_plan` | A checklist for multi-step work, so the AI doesn't report "done" too early |
 | `checkpoint`, `list_checkpoints` | Save and list project states |
 | `diff` | What changed since a checkpoint |
 | `undo` | Roll back to a checkpoint (the undo itself can be undone) |
+
+## Works like a coding agent
+
+JecBridge tells every connected AI to work the way Claude Code does, and backs it up in every tool response:
+
+- **It does the work itself.** It never asks you to copy code, create files or run commands. Files are written with `write_file`, commands run with `run_command` and `start_process`.
+- **It fixes problems right away.** A failed command, a test error or a crashed server comes back with "fix the cause and try again yourself".
+- **It checks before it reports.** It runs the tests or the build, starts the dev server and opens it with `http_get`.
+- **It doesn't say "done" early.** Multi-step work is tracked in `task_plan` until every item is verified.
+- **You get the result, not the process:** what works now and where.
+
+Safety rules are the exception: the AI is told not to work around them, and to tell you exactly what it would need instead.
 
 ## Undo: recovering from a bad change
 
@@ -202,7 +216,7 @@ Plain APIs like DeepSeek, Ollama or the OpenAI API need an agent with an MCP cli
 ## Tests
 
 ```bash
-npm test     # 33 end-to-end tests: build from scratch, edit, undo, security, dev servers, stdio, read-only, no-git
+npm test     # 36 end-to-end tests: build from scratch, edit, undo, security, dev servers, stdio, read-only, no-git
 ```
 
 ## License

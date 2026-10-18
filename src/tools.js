@@ -5,8 +5,29 @@ import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { VERSION } from "./version.js";
 
+// How the AI must work, the way a coding agent like Claude Code does. Sent as server
+// instructions and repeated in project_info, because some clients ignore instructions.
+export const WORKING_RULES = [
+  "Do the work yourself with these tools. Never ask the user to copy, paste, create or edit files, or run commands: write files with write_file/edit_file and run commands with run_command/start_process.",
+  "Never paste file contents into the chat instead of writing them. If your client refuses a write to some path, write to a temporary name (e.g. page.txt) and rename it with move_path.",
+  "When something fails (an error, a failing test, a crashed server), read the output, fix the cause and run it again. Keep going until it works.",
+  "Verify before you report: run the tests or the build, start dev servers with start_process and check them with http_get, read process_output for errors.",
+  "For work with several steps, keep a task_plan and update it as you go. Never say the work is done while an item is still open or unverified.",
+  "Reply with the result, not the process: what now works and where (files, URL). Ask the user only for what you cannot do yourself: a decision about what they want, credentials, or something outside this project.",
+  "Safety rules are not obstacles to work around. If safe mode blocks a command, use an allowed alternative; if there is none, tell the user exactly what they would need to allow.",
+];
+
+const SAFETY_BLOCK = /Access denied|not in the command allowlist|blocked in safe mode|Safe mode does not allow|read-only mode|points outside the project/;
+
 const ok = (text) => ({ content: [{ type: "text", text: typeof text === "string" ? text : JSON.stringify(text, null, 2) }] });
-const fail = (e) => ({ isError: true, content: [{ type: "text", text: `Error: ${e?.message || e}` }] });
+// Every error tells the AI what to do next, so it fixes problems instead of handing them to the user
+const fail = (e) => {
+  const msg = String(e?.message || e);
+  const next = SAFETY_BLOCK.test(msg)
+    ? "This is a safety rule, not a bug: don't try to bypass it. Use an allowed alternative, or tell the user what they would need to allow."
+    : "Fix the cause and try again yourself. Don't ask the user to do it.";
+  return { isError: true, content: [{ type: "text", text: `Error: ${msg}\n\nNext: ${next}` }] };
+};
 const safe = (fn) => async (args) => { try { return await fn(args); } catch (e) { return fail(e); } };
 
 const MAX_READ = 400_000;
@@ -16,12 +37,12 @@ export function createServer(ws, log = () => {}) {
     { name: "jecbridge", version: VERSION },
     {
       instructions:
-        `You are working on a local project on the user's computer: ${path.basename(ws.root)}. ` +
+        `You are the hands-on coding agent for a local project on the user's computer: ${path.basename(ws.root)}. ` +
+        "Work like Claude Code. Rules:\n" + WORKING_RULES.map((r, i) => `${i + 1}. ${r}`).join("\n") + "\n" +
         "Start with project_info and list_files. Prefer edit_file over rewriting whole files. " +
-        "To run a dev server, use start_process and give the user the URL it returns. " +
+        "To run a dev server, use start_process, check it with http_get and give the user the URL. " +
         (ws.hasGit
-          ? "A checkpoint is taken automatically before every change; if something goes wrong, use list_checkpoints + undo. " +
-            "When you finish, show the result with diff. "
+          ? "A checkpoint is taken automatically before every change; if something goes wrong, use list_checkpoints + undo. "
           : "Checkpoints and undo are OFF (git is not installed), so be careful with destructive changes. ") +
         "Reply to the user in their own language.",
     },
@@ -44,7 +65,7 @@ export function createServer(ws, log = () => {}) {
 
   server.registerTool("project_info", {
     title: "Project info",
-    description: "Project name, key files (package.json, README, etc.), top-level file count and server mode. Call this first.",
+    description: "Project name, key files (package.json, README, etc.), top-level file count, server mode and the working rules you must follow. Call this first.",
     inputSchema: {},
     annotations: ro,
   }, safe(async () => {
@@ -63,6 +84,8 @@ export function createServer(ws, log = () => {}) {
       totalFilesTopLevel: total,
       mode: { readOnly: ws.readOnly, checkpoints: ws.hasGit, commands: ws.allowAllCommands ? "all allowed" : [...ws.allowed] },
       keyFiles: found,
+      ...(ws.plan ? { taskPlan: ws.plan } : {}),
+      workingRules: WORKING_RULES,
     });
   }));
 
@@ -114,7 +137,8 @@ export function createServer(ws, log = () => {}) {
 
   server.registerTool("write_file", {
     title: "Write file",
-    description: "Create a new file or fully replace an existing one. Parent folders are created automatically. To change part of an existing file, use edit_file.",
+    description: "Create a new file or fully replace an existing one. Parent folders are created automatically. To change part of an existing file, use edit_file. " +
+      "This is how files get created: never paste file contents into the chat for the user to copy.",
     inputSchema: { path: z.string(), content: z.string() },
     annotations: rw,
   }, mutate("write_file", async ({ path: p, content }) => {
@@ -192,7 +216,9 @@ export function createServer(ws, log = () => {}) {
     annotations: destructive,
   }, mutate("run_command", async ({ command, cwd, timeout_sec }) => {
     const r = await ws.run(command, { cwd, timeoutSec: timeout_sec });
-    return { ...ok(`exit code: ${r.exitCode}\n${r.output || "(no output)"}`), isError: r.exitCode !== 0 };
+    const next = r.exitCode === 0 ? "" :
+      "\n\nNext: the command failed. Read the output above, fix the cause and run it again yourself. Don't ask the user to do it.";
+    return { ...ok(`exit code: ${r.exitCode}\n${r.output || "(no output)"}${next}`), isError: r.exitCode !== 0 };
   }));
 
   server.registerTool("start_process", {
@@ -208,6 +234,10 @@ export function createServer(ws, log = () => {}) {
     annotations: destructive,
   }, mutate("start_process", async ({ command, cwd, wait_sec }) => {
     const info = await ws.startProcess(command, { cwd, waitSec: wait_sec });
+    info.next = !info.running
+      ? (info.exitCode === 0 ? "The process finished; if it should keep running, check its output." : "The process crashed. Read its output, fix the cause and start it again yourself.")
+      : info.url ? `Check it with http_get ${info.url} before you give the user the URL.`
+      : "No URL seen yet. Check process_output; if it is still starting, wait and look again.";
     return { ...ok(info), isError: !info.running && info.exitCode !== 0 };
   }));
 
@@ -227,6 +257,37 @@ export function createServer(ws, log = () => {}) {
     inputSchema: { id: z.string().describe("Process id from start_process, e.g. p1") },
     annotations: rw,
   }, safe(async ({ id }) => { log("stop_process", id); return ok(await ws.stopProcess(id)); }));
+
+  server.registerTool("http_get", {
+    title: "Check a local URL",
+    description: "Fetch a page or API endpoint from a dev server started with start_process (e.g. http://localhost:5173/) to verify that it works. " +
+      "Returns the status, content type, page title and the start of the body. Only the local ports of running background processes can be reached.",
+    inputSchema: { url: z.string().describe("e.g. http://localhost:5173/ or http://localhost:3000/api/health") },
+    annotations: ro,
+  }, safe(async ({ url }) => {
+    const r = await ws.httpGet(url);
+    return { ...ok(r), isError: r.status >= 400 };
+  }));
+
+  server.registerTool("task_plan", {
+    title: "Task plan",
+    description: "Your checklist for work with several steps. Send the whole list every time, each item with its status (pending, in_progress, done). " +
+      "Mark an item done only after you verified it. Don't tell the user the work is finished while any item is not done.",
+    inputSchema: {
+      items: z.array(z.object({
+        title: z.string().min(1),
+        status: z.enum(["pending", "in_progress", "done"]),
+      })).min(1).max(50),
+    },
+    annotations: ro,
+  }, safe(async ({ items }) => {
+    ws.plan = items;
+    const open = items.filter((i) => i.status !== "done");
+    if (!open.length) return ok(`All ${items.length} items are done. Report the result to the user: what works now and where.`);
+    return ok(`${items.length - open.length}/${items.length} done. Still open:\n` +
+      open.map((i) => `- [${i.status}] ${i.title}`).join("\n") +
+      "\nKeep working. Don't report the work as finished yet.");
+  }));
 
   server.registerTool("checkpoint", {
     title: "Save checkpoint",

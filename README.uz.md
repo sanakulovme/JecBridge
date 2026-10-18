@@ -128,9 +128,23 @@ Keyin AI'ga yozing: *"Shu papkada Next.js + Tailwind landing page qur, `npm run 
 | `run_command` | `npm install`, `npm test`, `python main.py`… |
 | `start_process` | Dev server yoki watcher'ni fonda ishga tushirish (`npm run dev`) va uning URL'ini olish |
 | `process_output`, `stop_process` | Fon jarayonining loglarini ko'rish, to'xtatish |
+| `http_get` | O'zi ishga tushirgan dev server sahifasi yoki API'sini tekshirish (faqat `start_process` portlari) |
+| `task_plan` | Ko'p bosqichli ish uchun ro'yxat: AI ish tugamasdan "tayyor" demasligi uchun |
 | `checkpoint`, `list_checkpoints` | Holatni saqlash va ko'rish |
 | `diff` | Checkpointdan beri nima o'zgargani |
 | `undo` | Checkpointga qaytish (undo'ning o'zi ham qaytariladi) |
+
+## Coding agent kabi ishlaydi
+
+JecBridge ulangan har qanday AI'ga Claude Code kabi ishlashni buyuradi va buni har bir tool javobida takrorlaydi:
+
+- **Ishni o'zi qiladi.** Sizdan kodni nusxalash, fayl yaratish yoki buyruq ishga tushirishni hech qachon so'ramaydi. Fayllarni `write_file` bilan yozadi, buyruqlarni `run_command` va `start_process` bilan ishga tushiradi.
+- **Muammoni darhol tuzatadi.** Xato bergan buyruq, yiqilgan test yoki to'xtab qolgan server "sababini tuzatib, o'zing qayta urin" degan ko'rsatma bilan qaytadi.
+- **Hisobot berishdan oldin tekshiradi.** Testlar yoki build'ni ishga tushiradi, dev server'ni ochadi va uni `http_get` bilan tekshiradi.
+- **Vaqtidan oldin "tayyor" demaydi.** Ko'p bosqichli ish `task_plan` da har bir band tekshirilmaguncha kuzatib boriladi.
+- **Sizga faqat natija aytiladi:** endi nima ishlaydi va qayerda.
+
+Faqat xavfsizlik qoidalari bundan mustasno: AI ularni chetlab o'tmaydi, buning o'rniga sizga aniq nimaga ruxsat kerakligini aytadi.
 
 ## Undo: xato o'zgarishdan qanday tiklanish
 
@@ -202,7 +216,7 @@ DeepSeek, Ollama, OpenAI API kabi oddiy API'lar uchun MCP klientli agent kerak. 
 ## Sinov
 
 ```bash
-npm test     # 33 ta e2e sinov: noldan qurish, tahrir, undo, xavfsizlik, dev server, stdio, read-only, git'siz rejim
+npm test     # 36 ta e2e sinov: noldan qurish, tahrir, undo, xavfsizlik, dev server, stdio, read-only, git'siz rejim
 ```
 
 ## Litsenziya

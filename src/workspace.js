@@ -33,6 +33,8 @@ const PROCESS_LOG_MAX = 200_000;
 // Dev servers print where they listen, e.g. "Local: http://localhost:5173/"
 const LOCAL_URL = /https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]):\d+[^\s'"<>]*/;
 const stripAnsi = (s) => s.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "");
+const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]", "0.0.0.0"]);
+const HTTP_BODY_MAX = 20_000;
 
 function killTree(child) {
   if (!child.pid) return;
@@ -332,6 +334,40 @@ export class Workspace {
       while (proc.exitCode === null && Date.now() < deadline) await new Promise((r) => setTimeout(r, 100));
     }
     return this.#processInfo(proc, 20);
+  }
+
+  // GET a URL served by one of our background processes, so the AI can check its own work.
+  // Only those ports are reachable: other local services (databases, Docker, admin panels) stay off limits.
+  async httpGet(url) {
+    let u;
+    try { u = new URL(url); } catch { throw new Error(`"${url}" is not a valid URL, e.g. http://localhost:5173/`); }
+    const portOf = (x) => x.port || (x.protocol === "https:" ? "443" : "80");
+    const ports = new Set([...this.processes.values()].filter((p) => p.exitCode === null && p.url).map((p) => portOf(new URL(p.url))));
+    if (!/^https?:$/.test(u.protocol) || !LOCAL_HOSTS.has(u.hostname) || !ports.has(portOf(u))) {
+      throw new Error(`http_get only reaches dev servers started with start_process` +
+        (ports.size ? ` (running on port ${[...ports].join(", ")})` : " (none is running)") + ". Start the server with start_process first.");
+    }
+    // "localhost" may resolve to IPv6 while the server listens on IPv4 (or the other way round)
+    const hosts = u.hostname === "localhost" || u.hostname === "0.0.0.0" ? [u.hostname, "127.0.0.1", "[::1]"] : [u.hostname];
+    let lastError;
+    for (const h of hosts) {
+      const target = new URL(u); target.hostname = h === "0.0.0.0" ? "127.0.0.1" : h;
+      try {
+        const res = await fetch(target, { redirect: "manual", signal: AbortSignal.timeout(10_000) });
+        const type = res.headers.get("content-type") || "";
+        const textual = /text|json|javascript|xml|html/.test(type) || !type;
+        const body = textual ? await res.text() : "";
+        const title = (body.match(/<title[^>]*>([^<]*)<\/title>/i) || [])[1];
+        return {
+          url, status: res.status, contentType: type,
+          ...(res.headers.get("location") ? { redirectsTo: res.headers.get("location") } : {}),
+          ...(title !== undefined ? { title: title.trim() } : {}),
+          body: textual ? body.slice(0, HTTP_BODY_MAX) : `(${type} body not shown)`,
+          ...(body.length > HTTP_BODY_MAX ? { truncated: true } : {}),
+        };
+      } catch (e) { lastError = e; }
+    }
+    throw new Error(`Could not reach ${url}: ${lastError?.cause?.code || lastError?.message}. Check process_output for errors.`);
   }
 
   #getProcess(id) {
