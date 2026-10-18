@@ -8,6 +8,7 @@ import { spawn, spawnSync } from "node:child_process";
 import assert from "node:assert/strict";
 import { assetName } from "../src/tunnel.js";
 import { cftPlatform } from "../src/browser.js";
+import { patternToRegex } from "../src/workspace.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -437,6 +438,70 @@ try {
       assert.ok(out.includes(fs.realpathSync(here)), out);
       assert.match(out, /127\.0\.0\.1:(878[89]|879\d|880\d)\//, out);
     } finally { p.kill(); blocker.close(); }
+  });
+
+  await t(".jecbridgeignore and --deny patterns behave like .gitignore", async () => {
+    const m = (pattern, p) => patternToRegex(pattern).test(p);
+    assert.ok(m("*.csv", "customers.csv") && m("*.csv", "data/deep/Export.CSV") && !m("*.csv", "data.csv.js"));
+    assert.ok(m("fixtures/", "fixtures/users.json") && m("fixtures/", "tests/fixtures/a.json") && !m("fixtures/", "myfixtures/a.json"));
+    assert.ok(m("/private.json", "private.json") && !m("/private.json", "sub/private.json"));
+    assert.ok(m("data/**/*.sql", "data/2024/01/dump.sql") && m("secrets.*", "config/secrets.yaml"));
+    assert.equal(patternToRegex("# comment"), null);
+  });
+
+  await t("files hidden by the user are invisible to the AI everywhere, even in old checkpoints", async () => {
+    const hDir = fs.mkdtempSync(path.join(os.tmpdir(), "cb-hide-"));
+    const connect = async (extra = []) => {
+      const c = new Client({ name: "e2e-hide", version: "1" });
+      await c.connect(new StdioClientTransport({ command: process.execPath, args: [CLI, hDir, "--stdio", ...extra], stderr: "ignore" }));
+      return { c, call: (name, args = {}) => c.callTool({ name, arguments: args }) };
+    };
+    // Before hiding: a checkpoint picks up the customer export
+    const a = await connect();
+    await a.call("write_file", { path: "data/customers.csv", content: "id,name\n1,Alice\n" });
+    await a.call("write_file", { path: "app.js", content: "console.log(1);\n" });
+    const before = json(await a.call("checkpoint", { label: "before hiding" })).id;
+    await a.c.close();
+
+    fs.writeFileSync(path.join(hDir, ".jecbridgeignore"), "# real data\n*.csv\nfixtures/\n");
+    fs.mkdirSync(path.join(hDir, "fixtures"));
+    fs.writeFileSync(path.join(hDir, "fixtures/users.json"), '{"secret":"SECRET_FIXTURE"}');
+    fs.writeFileSync(path.join(hDir, "backup.sql"), "INSERT SECRET_DUMP;");
+    fs.writeFileSync(path.join(hDir, "data/customers.csv"), "id,name\n1,SECRET_CUSTOMER\n");
+
+    const b = await connect(["--deny", "*.sql"]);
+    try {
+      for (const p of ["data/customers.csv", "fixtures/users.json", "backup.sql"]) {
+        const r = await b.call("read_file", { path: p });
+        assert.ok(r.isError && /hidden by the user/.test(text(r)), `${p}: ${text(r)}`);
+      }
+      const listed = text(await b.call("list_files"));
+      assert.ok(listed.includes("app.js") && !/customers|fixtures|backup\.sql/.test(listed), listed);
+      assert.ok(!/SECRET_/.test(text(await b.call("search_code", { pattern: "SECRET_" }))));
+      assert.ok((await b.call("run_command", { command: "cat data/customers.csv" })).isError);
+      const d = text(await b.call("diff", { since: before }));
+      assert.ok(!/customers|SECRET_|Alice/.test(d), d);
+      // The AI can't read or rewrite the ignore file to lift its own restrictions
+      assert.ok((await b.call("read_file", { path: ".jecbridgeignore" })).isError);
+      assert.ok((await b.call("write_file", { path: ".jecbridgeignore", content: "" })).isError);
+      assert.deepEqual(json(await b.call("project_info")).hiddenByUser, ["*.csv", "fixtures/", "*.sql"]);
+    } finally { await b.c.close(); }
+  });
+
+  await t("startup warns which readable files look like real data, and how to hide them", async () => {
+    const wDir = fs.mkdtempSync(path.join(os.tmpdir(), "cb-warn-"));
+    fs.writeFileSync(path.join(wDir, "export.csv"), "a,b");
+    fs.writeFileSync(path.join(wDir, "dump.sql"), "x");
+    fs.writeFileSync(path.join(wDir, "app.js"), "x");
+    const run = () => spawnSync(process.execPath, [CLI, wDir, "--stdio"], { input: "", encoding: "utf8", timeout: 20_000 }).stderr;
+    let err = run();
+    assert.match(err, /Heads-up: the AI can read these files/);
+    assert.ok(err.includes("export.csv") && err.includes("dump.sql") && !err.includes("app.js"), err);
+    assert.match(err, /--deny "\*\.csv,\*\.sql"/);
+    assert.match(err, /copied into the AI chat/);
+    fs.writeFileSync(path.join(wDir, ".jecbridgeignore"), "*.csv\n");
+    err = run();
+    assert.ok(err.includes("dump.sql") && !err.includes("export.csv"), err);
   });
 
   await t("--new-token replaces the saved token", async () => {

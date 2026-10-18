@@ -14,9 +14,40 @@ const DENY_PATTERNS = [
   /(^|\/)\.env(\..*)?$/i,
   /\.(pem|key|p12|pfx)$/i,
   /(^|\/)id_(rsa|ed25519|ecdsa)(\.pub)?$/i,
+  /(^|\/)\.jecbridgeignore$/i, // the AI must not be able to lift its own restrictions
 ];
 
-const isDenied = (p) => DENY_PATTERNS.some((re) => re.test(p));
+const builtinDenied = (p) => DENY_PATTERNS.some((re) => re.test(p));
+
+export const IGNORE_FILE = ".jecbridgeignore";
+
+// .gitignore-style pattern → RegExp on a project-relative path ("data/customers.csv").
+// "*.csv" matches in any folder, "fixtures/" is a folder anywhere, "/private.json" or "a/b" are anchored to the root.
+export function patternToRegex(pattern) {
+  let p = pattern.trim().replace(/\\/g, "/");
+  if (!p || p.startsWith("#")) return null;
+  if (p.endsWith("/")) p = p.slice(0, -1);
+  const anchored = p.includes("/");
+  p = p.replace(/^\/+/, "");
+  let re = "";
+  for (let i = 0; i < p.length; i++) {
+    const c = p[i];
+    if (c === "*" && p[i + 1] === "*") { re += ".*"; i++; if (p[i + 1] === "/") i++; }
+    else if (c === "*") re += "[^/]*";
+    else if (c === "?") re += "[^/]";
+    else re += c.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+  }
+  // matching a folder also hides everything inside it
+  return new RegExp((anchored ? "^" : "(^|/)") + re + "(/|$)", "i");
+}
+
+// Data files that often hold real people's data, flagged at startup so the user sees the exposure
+const SENSITIVE_DATA = [
+  { kind: "data exports", re: /\.(csv|tsv|xlsx?|parquet|jsonl|ndjson)$/i },
+  { kind: "databases", re: /\.(db|sqlite3?|mdb|accdb)$/i },
+  { kind: "SQL dumps and backups", re: /\.(sql|dump|bak)$/i },
+  { kind: "fixture and seed data", re: /(^|\/)(fixtures?|seeds?|dumps?|backups?|exports?)\// },
+];
 
 // Environment variables that look like credentials are not passed to commands in safe mode
 const SECRET_ENV = /TOKEN|SECRET|PASSW(OR)?D|API_?KEY|PRIVATE_?KEY|CREDENTIAL|AUTH/i;
@@ -75,6 +106,11 @@ export class Workspace {
     this.allowAllCommands = !!opts.allowAllCommands;
     this.allowed = new Set(opts.allowedCommands || DEFAULT_ALLOWED);
     this.readOnly = !!opts.readOnly;
+    // User deny list: .jecbridgeignore in the project plus --deny patterns
+    const ignoreFile = path.join(this.root, IGNORE_FILE);
+    const fromFile = fs.existsSync(ignoreFile) ? fs.readFileSync(ignoreFile, "utf8").split(/\r?\n/) : [];
+    this.denyPatterns = [...fromFile, ...(opts.deny || [])].map((s) => s.trim()).filter((s) => s && !s.startsWith("#"));
+    this.userDeny = this.denyPatterns.map(patternToRegex).filter(Boolean);
     // Read-only mode must not write into the project, so its metadata lives in the temp folder
     this.metaDir = this.readOnly
       ? path.join(os.tmpdir(), "jecbridge", crypto.createHash("sha256").update(this.root).digest("hex").slice(0, 16))
@@ -103,11 +139,39 @@ export class Workspace {
       throw new Error(`Access denied: "${rel}" resolves outside the project via a symlink`);
     }
     const norm = relToRoot.split(path.sep).join("/");
-    if (norm && isDenied(norm)) {
+    if (norm && builtinDenied(norm)) {
       throw new Error(`Access denied: "${norm}" is protected (secret or internal file)`);
+    }
+    if (norm && this.userDeny.some((re) => re.test(norm))) {
+      throw new Error(`Access denied: "${norm}" is hidden by the user (${IGNORE_FILE} or --deny)`);
     }
     if (forWrite && this.readOnly) throw new Error("Server is running in read-only mode");
     return { abs, rel: norm || "." };
+  }
+
+  isDenied(p) {
+    return builtinDenied(p) || this.userDeny.some((re) => re.test(p));
+  }
+
+  // Readable files that look like real data (CSV exports, SQL dumps, databases, fixtures), grouped by kind
+  exposureReport(maxScan = 20_000) {
+    const groups = new Map();
+    let scanned = 0;
+    const visit = (dirRel) => {
+      let entries;
+      try { entries = fs.readdirSync(path.join(this.root, dirRel), { withFileTypes: true }); } catch { return; }
+      for (const e of entries) {
+        if (++scanned > maxScan) return;
+        const p = dirRel === "." ? e.name : `${dirRel}/${e.name}`;
+        if (this.isDenied(p)) continue;
+        if (e.isDirectory()) { if (!SKIP_DIRS.has(e.name.toLowerCase())) visit(p); continue; }
+        if (!e.isFile()) continue;
+        const hit = SENSITIVE_DATA.find((s) => s.re.test(p));
+        if (hit) groups.set(hit.kind, [...(groups.get(hit.kind) || []), p]);
+      }
+    };
+    visit(".");
+    return SENSITIVE_DATA.filter((s) => groups.has(s.kind)).map((s) => ({ kind: s.kind, files: groups.get(s.kind).sort() }));
   }
 
   // ---------- shadow git (never touches the project's own .git) ----------
@@ -138,7 +202,13 @@ export class Workspace {
     const exclude = path.join(this.gitDir, "info", "exclude");
     fs.mkdirSync(path.dirname(exclude), { recursive: true });
     fs.writeFileSync(exclude, [".jecbridge/", ".git/", "node_modules/", ".venv/", "venv/",
-      "__pycache__/", "dist/", "build/", ".next/", "target/", ".DS_Store", ".env", ".env.*", ""].join("\n"));
+      "__pycache__/", "dist/", "build/", ".next/", "target/", ".DS_Store", ".env", ".env.*", IGNORE_FILE,
+      ...this.denyPatterns, ""].join("\n"));
+    // Hidden files must not show up in diffs either: stop tracking any that earlier checkpoints picked up
+    if (this.denyPatterns.length && this.hasCommits()) {
+      const tracked = this.#git(["ls-files"]).split("\n").filter((f) => f && this.isDenied(f));
+      for (let i = 0; i < tracked.length; i += 100) this.#git(["rm", "-q", "--cached", "--", ...tracked.slice(i, i + 100)]);
+    }
   }
 
   hasCommits() {
@@ -167,7 +237,19 @@ export class Workspace {
     if (!this.hasCommits()) return "(no checkpoints yet)";
     this.#git(["add", "-A", "-N"]); // include new files in the diff
     const out = this.#git(["diff", since || "HEAD", "--stat", "--patch", "--no-color"]);
-    return out.trim() || "(no changes)";
+    // An old checkpoint may still hold a file that is hidden now: drop its section from the diff
+    const sections = out.split(/(?=^diff --git )/m).filter((s) => {
+      const m = s.match(/^diff --git a\/(.+?) b\//);
+      return !m || !this.isDenied(m[1]);
+    });
+    // ...and its line from the --stat summary at the top
+    if (sections[0] && !sections[0].startsWith("diff --git ")) {
+      sections[0] = sections[0].split("\n").filter((l) => {
+        const m = l.match(/^\s(.+?)\s+\|\s/);
+        return !m || !this.isDenied(m[1].trim());
+      }).join("\n");
+    }
+    return sections.join("").trim() || "(no changes)";
   }
 
   restore(id) {
@@ -196,7 +278,7 @@ export class Workspace {
     }
     files = [...new Set(files)].filter((f) => {
       const depth = (rel === "." ? f : path.posix.relative(rel, f)).split("/").length;
-      return depth <= maxDepth && !isDenied(f) && fs.existsSync(path.join(this.root, f));
+      return depth <= maxDepth && !this.isDenied(f) && fs.existsSync(path.join(this.root, f));
     }).sort();
     return { files: files.slice(0, limit), truncated: files.length > limit, total: files.length };
   }
@@ -435,7 +517,7 @@ export class Workspace {
       const out = execFileSync("rg", args, { cwd: this.root, encoding: "utf8", maxBuffer: 20 * 1024 * 1024 });
       // rg globs/ignore rules may be case-sensitive — filter protected paths again
       const lines = out.split("\n").filter(Boolean).map((l) => l.replace(/^\.\//, ""))
-        .filter((l) => !isDenied(l.split(":")[0]));
+        .filter((l) => !this.isDenied(l.split(":")[0]));
       if (!lines.length) return "(no matches)";
       return lines.slice(0, maxResults).join("\n") + (lines.length > maxResults ? `\n[...${lines.length - maxResults} more matches]` : "");
     } catch (e) {

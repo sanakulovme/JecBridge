@@ -8,7 +8,7 @@ import http from "node:http";
 import express from "express";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { Workspace } from "./workspace.js";
+import { Workspace, IGNORE_FILE } from "./workspace.js";
 import { createServer } from "./tools.js";
 import { VERSION } from "./version.js";
 import { startTunnel, copyToClipboard } from "./tunnel.js";
@@ -31,6 +31,8 @@ Options:
   --tunnel                public HTTPS URL for web AIs (cloudflared is downloaded automatically)
   --token <t>             secret token (default: generated and saved)
   --new-token             replace the saved token, so every old URL stops working
+  --deny <a,b,c>          hide more files from the AI, e.g. "*.csv,*.sql,fixtures/"
+                          (also read from a .jecbridgeignore file in the project)
   --read-only             read-only mode (no writes, no commands, nothing saved in the project)
   --allow-all-commands    allow any shell command (USE WITH CARE)
   --allow <a,b,c>         replace the command allowlist
@@ -66,6 +68,10 @@ function parseArgs(argv) {
     else if (a === "--host") o.host = value(++i, a);
     else if (a === "--token") o.token = value(++i, a);
     else if (a === "--new-token") o.newToken = true;
+    else if (a === "--deny") {
+      o.deny = [...(o.deny || []), ...value(++i, a).split(",").map((s) => s.trim()).filter(Boolean)];
+      if (!o.deny.length) usageError('--deny needs patterns, e.g. --deny "*.csv,*.sql,fixtures/"');
+    }
     else if (a === "--allow") {
       o.allow = value(++i, a).split(",").map((s) => s.trim()).filter(Boolean);
       if (!o.allow.length) usageError("--allow needs at least one command, e.g. --allow npm,node");
@@ -95,7 +101,25 @@ const ws = new Workspace(rootAbs, {
   readOnly: opts.readOnly,
   allowAllCommands: opts.allowAll,
   allowedCommands: opts.allow,
+  deny: opts.deny,
 });
+
+// Everything the AI reads lands in its chat, so show which data-like files it could read before anyone connects
+function exposureWarning() {
+  const note = "Note: every file the AI reads is copied into the AI chat and kept by your AI provider. " +
+    `Hide files with ${IGNORE_FILE} or --deny.`;
+  const groups = ws.exposureReport();
+  if (!groups.length) return `\n${note}\n`;
+  const lines = groups.map(({ kind, files }) =>
+    `  ${(kind + ":").padEnd(24)}${files.slice(0, 3).join(", ")}${files.length > 3 ? ` (+${files.length - 3} more)` : ""}`);
+  const examples = [...new Set(groups.flatMap(({ files }) => files.map((f) => {
+    const ext = path.extname(f);
+    return ext ? `*${ext.toLowerCase()}` : `${f.split("/")[0]}/`;
+  })))].slice(0, 4);
+  return `\nHeads-up: the AI can read these files, and whatever it reads is copied into the AI chat:\n${lines.join("\n")}\n` +
+    `If they hold real or customer data, hide them: add patterns to ${IGNORE_FILE} (e.g. ${examples[0]}) ` +
+    `or restart with --deny "${examples.join(",")}".\n`;
+}
 
 // In stdio mode stdout carries MCP traffic, so logs go to stderr
 const log = (...a) => console.error(`[${new Date().toLocaleTimeString()}]`, ...a);
@@ -106,6 +130,7 @@ if (opts.stdio) {
   // When the client goes away, exit so background processes are stopped too
   process.stdin.on("close", () => process.exit(0));
   log(`JecBridge (stdio) is running: ${ws.root}`);
+  console.error(exposureWarning());
 } else {
   await startHttp();
 }
@@ -200,8 +225,10 @@ async function startHttp() {
 │ Project:  ${ws.root}
 │ Mode:     ${ws.readOnly ? "read-only" : "read + write"} · commands: ${ws.allowAllCommands ? "ALL ALLOWED" : "safe allowlist"}
 │ Undo:     ${ws.hasGit ? "automatic checkpoints on" : "OFF — install git to enable checkpoints and undo"}
+│ Hidden:   .env, keys, .git${ws.denyPatterns.length ? ", " + ws.denyPatterns.join(", ") : ""}
 │ Local:    ${local}/mcp/${token}
 └───────────────────────────────────────────────────────────`);
+  console.log(exposureWarning());
 
   if (!opts.tunnel) {
     console.log(`\nUsing claude.ai, ChatGPT or Gemini? Restart with --tunnel to get a public URL.\n`);

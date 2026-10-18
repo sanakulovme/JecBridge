@@ -109,6 +109,7 @@ Keyin AI'ga yozing: *"Shu papkada Next.js + Tailwind landing page qur, `npm run 
 | `--host <h>` | HTTP host (standart `127.0.0.1`) |
 | `--tunnel` | Web AI'lar uchun public HTTPS URL (cloudflared avtomatik yuklab olinadi) |
 | `--token <t>` | Maxfiy token (standart: yaratiladi va saqlanadi; `JECBRIDGE_TOKEN` ham ishlaydi) |
+| `--deny <a,b,c>` | AI'dan qo'shimcha fayllarni yashirish, masalan `"*.csv,*.sql,fixtures/"` (`.jecbridgeignore` dan ham o'qiladi) |
 | `--new-token` | Saqlangan tokenni almashtiradi, barcha eski URL'lar ishlamay qoladi |
 | `--read-only` | Yozish yo'q, buyruq yo'q, loyihaga hech narsa saqlanmaydi |
 | `--allow <a,b,c>` | Buyruqlar ro'yxatini almashtirish |
@@ -170,6 +171,35 @@ Undo nimani tiklaydi va nimani tiklamaydi:
 
 Bu "bitta o'zgarishni bekor qilish" emas, "nuqtaga qaytish": tanlangan checkpoint'dan keyingi hamma narsa qaytariladi.
 
+## AI nimani ko'radi va u qayerga ketadi
+
+**O'qish — bu nusxa olish.** AI JecBridge orqali o'qigan har bir fayl o'sha AI suhbatining bir qismiga aylanadi. U claude.ai, ChatGPT yoki Gemini akkauntingizda, o'sha provayderning ma'lumot saqlash va o'qitish sozlamalari bo'yicha, tunnel yopilgandan keyin ham saqlanadi. Loyihada mijozlar eksporti yoki SQL dump bo'lsa, faqat `.env` ni yashirish yetarli emas.
+
+Shuning uchun AI nimani hech qachon ko'rmasligini o'zingiz belgilaysiz:
+
+- Loyiha ildizidagi **`.jecbridgeignore`** fayli. Sintaksisi `.gitignore` bilan bir xil:
+  ```
+  # haqiqiy mijoz ma'lumotlari
+  *.csv
+  *.sql
+  fixtures/
+  /exports/2024.xlsx
+  ```
+- Bir martalik sessiya uchun buyruq qatorida **`--deny "*.csv,*.sql,fixtures/"`**.
+
+Yashirilgan fayllar barcha tool'larda bloklanadi: o'qish, yozish, qidiruv, ro'yxat, `diff` (eski checkpoint'lar bilan solishtirganda ham), buyruq argumentlari va sahifa tekshiruvi. AI cheklovni olib tashlash uchun `.jecbridgeignore` ni o'qiy ham, o'zgartira ham olmaydi.
+
+**Xavfni ulanishdan oldin ko'rasiz.** Ishga tushganda JecBridge haqiqiy ma'lumotga o'xshagan va AI o'qiy oladigan fayllarni ko'rsatadi: CSV/Excel eksportlar, SQL dump va backup'lar, ma'lumotlar bazalari, fixture va seed papkalari. Ularni yashirish uchun aniq pattern'ni ham taklif qiladi:
+
+```
+Heads-up: the AI can read these files, and whatever it reads is copied into the AI chat:
+  data exports:           customers.csv, orders.csv
+  SQL dumps and backups:  backup.sql
+If they hold real or customer data, hide them: add patterns to .jecbridgeignore (e.g. *.csv) or restart with --deny "*.csv,*.sql".
+```
+
+Mijoz loyihalarida haqiqiy ma'lumotlarsiz nusxa bilan ishlang yoki ma'lumot sozlamalarini tekshirgan provayder va tarifdan foydalaning.
+
 ## Xavfsizlik
 
 - **Papka qamog'i.** `../`, absolyut yo'llar va symlink orqali loyihadan tashqariga chiqib bo'lmaydi. Har bir yo'l tekshiruvdan oldin `realpath` bilan hal qilinadi. Shuning uchun `~/.ssh` ga ishora qiluvchi symlink fayl tool'lari, qidiruv, `project_info` va buyruq argumentlarida bir xilda rad etiladi.
@@ -218,7 +248,7 @@ DeepSeek, Ollama, OpenAI API kabi oddiy API'lar uchun MCP klientli agent kerak. 
 ## Sinov
 
 ```bash
-npm test     # 39 ta e2e sinov: noldan qurish, tahrir, undo, xavfsizlik, dev server, stdio, read-only, git'siz rejim
+npm test     # 42 ta e2e sinov: noldan qurish, tahrir, undo, xavfsizlik, dev server, stdio, read-only, git'siz rejim
 ```
 
 ## Litsenziya

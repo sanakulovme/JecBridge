@@ -84,6 +84,7 @@ export function createServer(ws, log = () => {}) {
       topLevel: files,
       totalFilesTopLevel: total,
       mode: { readOnly: ws.readOnly, checkpoints: ws.hasGit, commands: ws.allowAllCommands ? "all allowed" : [...ws.allowed] },
+      ...(ws.denyPatterns.length ? { hiddenByUser: ws.denyPatterns } : {}),
       keyFiles: found,
       ...(ws.plan ? { taskPlan: ws.plan } : {}),
       workingRules: WORKING_RULES,

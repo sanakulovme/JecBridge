@@ -109,6 +109,7 @@ Then tell the AI: *"Build a Next.js + Tailwind landing page in this folder and c
 | `--host <h>` | HTTP host (default `127.0.0.1`) |
 | `--tunnel` | Public HTTPS URL for web AIs (cloudflared is downloaded automatically) |
 | `--token <t>` | Secret token (default: generated and saved; also `JECBRIDGE_TOKEN`) |
+| `--deny <a,b,c>` | Hide more files from the AI, e.g. `"*.csv,*.sql,fixtures/"` (also read from `.jecbridgeignore`) |
 | `--new-token` | Replace the saved token, so every old URL stops working |
 | `--read-only` | No writes, no commands, nothing saved in the project |
 | `--allow <a,b,c>` | Replace the command allowlist |
@@ -170,6 +171,35 @@ What undo covers and what it doesn't:
 
 It is "restore to a point", not "revert one change": everything after the checkpoint you pick is rolled back.
 
+## What the AI sees, and where it goes
+
+**A read is a copy.** Every file the AI reads through JecBridge becomes part of that AI chat. It is stored in your claude.ai, ChatGPT or Gemini account under that provider's retention and training settings, long after the tunnel is closed. Hiding `.env` doesn't help with a customer export or a SQL dump sitting in the project.
+
+So JecBridge lets you decide what the AI never sees:
+
+- **`.jecbridgeignore`** in the project root, same syntax as `.gitignore`:
+  ```
+  # real customer data
+  *.csv
+  *.sql
+  fixtures/
+  /exports/2024.xlsx
+  ```
+- **`--deny "*.csv,*.sql,fixtures/"`** on the command line, for a one-off session.
+
+Hidden files are blocked for every tool: read, write, search, listing, `diff` (even against older checkpoints), command arguments and the page checker. The AI can't read or edit `.jecbridgeignore` to lift the restriction.
+
+**You see the exposure before you connect.** At startup JecBridge lists readable files that look like real data (CSV/Excel exports, SQL dumps and backups, databases, fixture and seed folders) and shows the exact pattern to hide them:
+
+```
+Heads-up: the AI can read these files, and whatever it reads is copied into the AI chat:
+  data exports:           customers.csv, orders.csv
+  SQL dumps and backups:  backup.sql
+If they hold real or customer data, hide them: add patterns to .jecbridgeignore (e.g. *.csv) or restart with --deny "*.csv,*.sql".
+```
+
+For client work, prefer a copy of the repo without real data, or a provider and plan whose data settings you have checked.
+
 ## Security
 
 - **Folder jail.** `../`, absolute paths and symlinks can't escape the project. Every path is resolved with `realpath` before the check, so a symlink to `~/.ssh` is rejected by file tools, search, `project_info` and command arguments alike.
@@ -218,7 +248,7 @@ Plain APIs like DeepSeek, Ollama or the OpenAI API need an agent with an MCP cli
 ## Tests
 
 ```bash
-npm test     # 39 end-to-end tests: build from scratch, edit, undo, security, dev servers, stdio, read-only, no-git
+npm test     # 42 end-to-end tests: build from scratch, edit, undo, security, dev servers, stdio, read-only, no-git
 ```
 
 ## License

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.0 — 2026-10-18
+
+Based on feedback from the AI Automation Society community: a read is a copy into the AI chat.
+
+- `.jecbridgeignore` (gitignore syntax) and `--deny "*.csv,*.sql,fixtures/"` hide more files from the AI. Hidden files are blocked for read, write, search, listing, diff (also against older checkpoints), command arguments and check_page, and are kept out of new checkpoints. The AI can't read or change `.jecbridgeignore`
+- Startup warning: readable files that look like real data (CSV/Excel exports, SQL dumps, databases, fixture/seed folders) are listed with the exact pattern to hide them
+- The banner shows what is hidden, and every start notes that whatever the AI reads is copied into the AI chat
+- `project_info` tells the AI which patterns the user hid
+- README: "What the AI sees, and where it goes"
+
 ## 0.5.0 — 2026-10-18
 
 The AI now tests its work in a real browser before it reports.
