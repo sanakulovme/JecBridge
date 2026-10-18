@@ -127,7 +127,8 @@ Keyin AI'ga yozing: *"Shu papkada Next.js + Tailwind landing page qur, `npm run 
 | `delete_path`, `move_path` | O'chirish, ko'chirish, qayta nomlash |
 | `run_command` | `npm install`, `npm test`, `python main.py`… |
 | `start_process` | Dev server yoki watcher'ni fonda ishga tushirish (`npm run dev`) va uning URL'ini olish |
-| `process_output`, `stop_process` | Fon jarayonining loglarini ko'rish, to'xtatish |
+| `process_output`, `stop_process` | Fon jarayonining loglarini ko'rish (xatolar `problems` ga yig'iladi), to'xtatish |
+| `check_page` | Sahifani headless brauzerda ochish: skrinshot, console xatolari, muvaffaqiyatsiz so'rovlar; bosish va yozish orqali sinash. Dev server va oddiy HTML fayllar uchun ishlaydi |
 | `http_get` | O'zi ishga tushirgan dev server sahifasi yoki API'sini tekshirish (faqat `start_process` portlari) |
 | `task_plan` | Ko'p bosqichli ish uchun ro'yxat: AI ish tugamasdan "tayyor" demasligi uchun |
 | `checkpoint`, `list_checkpoints` | Holatni saqlash va ko'rish |
@@ -140,7 +141,8 @@ JecBridge ulangan har qanday AI'ga Claude Code kabi ishlashni buyuradi va buni h
 
 - **Ishni o'zi qiladi.** Sizdan kodni nusxalash, fayl yaratish yoki buyruq ishga tushirishni hech qachon so'ramaydi. Fayllarni `write_file` bilan yozadi, buyruqlarni `run_command` va `start_process` bilan ishga tushiradi.
 - **Muammoni darhol tuzatadi.** Xato bergan buyruq, yiqilgan test yoki to'xtab qolgan server "sababini tuzatib, o'zing qayta urin" degan ko'rsatma bilan qaytadi.
-- **Hisobot berishdan oldin tekshiradi.** Testlar yoki build'ni ishga tushiradi, dev server'ni ochadi va uni `http_get` bilan tekshiradi.
+- **Hisobot berishdan oldin tekshiradi, xuddi sinchkov dasturchi kabi.** Testlar yoki build'ni ishga tushiradi, sahifani haqiqiy headless brauzerda `check_page` bilan ochadi, skrinshot, console xatolari va muvaffaqiyatsiz so'rovlarni ko'radi, asosiy tugmalarni bosib sinaydi va server loglarini o'qiydi. Topilgan xatoni tuzatib, qayta tekshiradi.
+  Chrome yoki Edge o'rnatilgan bo'lsa ular ishlatiladi, aks holda headless Chrome bir marta (~100 MB) `~/.jecbridge/browser` ga yuklab olinadi.
 - **Vaqtidan oldin "tayyor" demaydi.** Ko'p bosqichli ish `task_plan` da har bir band tekshirilmaguncha kuzatib boriladi.
 - **Sizga faqat natija aytiladi:** endi nima ishlaydi va qayerda.
 
@@ -216,7 +218,7 @@ DeepSeek, Ollama, OpenAI API kabi oddiy API'lar uchun MCP klientli agent kerak. 
 ## Sinov
 
 ```bash
-npm test     # 36 ta e2e sinov: noldan qurish, tahrir, undo, xavfsizlik, dev server, stdio, read-only, git'siz rejim
+npm test     # 39 ta e2e sinov: noldan qurish, tahrir, undo, xavfsizlik, dev server, stdio, read-only, git'siz rejim
 ```
 
 ## Litsenziya

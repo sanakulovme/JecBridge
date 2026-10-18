@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
+import http from "node:http";
 import { spawn, spawnSync, execFileSync } from "node:child_process";
 import crossSpawn from "cross-spawn";
 
@@ -31,10 +32,17 @@ for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(sig, () => process
 const MAX_PROCESSES = 5;
 const PROCESS_LOG_MAX = 200_000;
 // Dev servers print where they listen, e.g. "Local: http://localhost:5173/"
-const LOCAL_URL = /https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]):\d+[^\s'"<>]*/;
+const LOCAL_URL = /https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1?\]):\d+[^\s'"<>]*/;
 const stripAnsi = (s) => s.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "");
 const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]", "0.0.0.0"]);
 const HTTP_BODY_MAX = 20_000;
+const MIME = {
+  ".html": "text/html; charset=utf-8", ".htm": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8", ".mjs": "text/javascript; charset=utf-8", ".json": "application/json",
+  ".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
+  ".webp": "image/webp", ".ico": "image/x-icon", ".woff": "font/woff", ".woff2": "font/woff2", ".txt": "text/plain; charset=utf-8",
+};
+const PROBLEM_LINE = /\b(error|exception|failed|failure|cannot|can't|not found|traceback|panic|fatal|warn(ing)?)\b|ERR!|✘|✖/i;
 
 function killTree(child) {
   if (!child.pid) return;
@@ -60,6 +68,7 @@ const DEFAULT_ALLOWED = [
 export class Workspace {
   processes = new Map();
   #nextProcessId = 0;
+  #static = null;
 
   constructor(root, opts = {}) {
     this.root = fs.realpathSync(path.resolve(root));
@@ -308,7 +317,7 @@ export class Workspace {
       if (proc.out.length > PROCESS_LOG_MAX) proc.out = proc.out.slice(-PROCESS_LOG_MAX / 2);
       if (!proc.url) {
         const m = proc.out.match(LOCAL_URL);
-        if (m) proc.url = m[0].replace("0.0.0.0", "localhost");
+        if (m) proc.url = m[0].replace(/0\.0\.0\.0|\[::\]/, "localhost");
       }
     };
     child.stdout.on("data", add); child.stderr.on("data", add);
@@ -338,15 +347,43 @@ export class Workspace {
 
   // GET a URL served by one of our background processes, so the AI can check its own work.
   // Only those ports are reachable: other local services (databases, Docker, admin panels) stay off limits.
-  async httpGet(url) {
+  devUrl(url, tool = "http_get") {
     let u;
     try { u = new URL(url); } catch { throw new Error(`"${url}" is not a valid URL, e.g. http://localhost:5173/`); }
     const portOf = (x) => x.port || (x.protocol === "https:" ? "443" : "80");
     const ports = new Set([...this.processes.values()].filter((p) => p.exitCode === null && p.url).map((p) => portOf(new URL(p.url))));
     if (!/^https?:$/.test(u.protocol) || !LOCAL_HOSTS.has(u.hostname) || !ports.has(portOf(u))) {
-      throw new Error(`http_get only reaches dev servers started with start_process` +
+      throw new Error(`${tool} only reaches dev servers started with start_process` +
         (ports.size ? ` (running on port ${[...ports].join(", ")})` : " (none is running)") + ". Start the server with start_process first.");
     }
+    return u;
+  }
+
+  // Serve project files over http://127.0.0.1 so check_page can open plain HTML projects.
+  // Every request goes through resolve(), so the jail and the secret-file rules apply;
+  // http pages also can't read file:// URLs, which a file:// page could show in a screenshot.
+  async staticUrl(rel) {
+    const { rel: clean } = this.resolve(rel);
+    if (!this.#static) {
+      const server = http.createServer((req, res) => {
+        try {
+          let p = decodeURIComponent(new URL(req.url, "http://x").pathname).replace(/^\/+/, "") || ".";
+          let { abs } = this.resolve(p);
+          if (fs.existsSync(abs) && fs.statSync(abs).isDirectory()) abs = this.resolve(path.posix.join(p, "index.html")).abs;
+          if (!fs.existsSync(abs)) { res.statusCode = 404; return res.end("Not found"); }
+          res.setHeader("content-type", MIME[path.extname(abs).toLowerCase()] || "application/octet-stream");
+          fs.createReadStream(abs).pipe(res);
+        } catch { res.statusCode = 403; res.end("Forbidden"); }
+      });
+      await new Promise((r) => server.listen(0, "127.0.0.1", r));
+      server.unref();
+      this.#static = server;
+    }
+    return `http://127.0.0.1:${this.#static.address().port}/${clean === "." ? "" : clean.split("/").map(encodeURIComponent).join("/")}`;
+  }
+
+  async httpGet(url) {
+    const u = this.devUrl(url);
     // "localhost" may resolve to IPv6 while the server listens on IPv4 (or the other way round)
     const hosts = u.hostname === "localhost" || u.hostname === "0.0.0.0" ? [u.hostname, "127.0.0.1", "[::1]"] : [u.hostname];
     let lastError;
@@ -378,7 +415,13 @@ export class Workspace {
 
   #processInfo(p, lines) {
     const info = { id: p.id, command: p.command, cwd: p.cwd, running: p.exitCode === null, exitCode: p.exitCode, url: p.url, startedAt: p.startedAt };
-    if (lines > 0) info.output = p.out.split(/\r?\n/).slice(-lines).join("\n").trim();
+    if (lines > 0) {
+      const all = p.out.split(/\r?\n/);
+      info.output = all.slice(-lines).join("\n").trim();
+      // Error-looking lines from the whole log, so they aren't missed in a long output
+      const problems = [...new Set(all.filter((l) => PROBLEM_LINE.test(l)).map((l) => l.trim()))].slice(-20);
+      if (problems.length) info.problems = problems;
+    }
     return info;
   }
 

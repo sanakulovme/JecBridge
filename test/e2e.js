@@ -7,6 +7,7 @@ import net from "node:net";
 import { spawn, spawnSync } from "node:child_process";
 import assert from "node:assert/strict";
 import { assetName } from "../src/tunnel.js";
+import { cftPlatform } from "../src/browser.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -35,6 +36,20 @@ const json = (r) => JSON.parse(text(r));
 const DEV_SERVER = 'import http from "node:http";\n' +
   'const s = http.createServer((q, r) => r.end("dev ok"));\n' +
   's.listen(0, "127.0.0.1", () => console.log("  \\x1b[32mLocal:\\x1b[0m   http://localhost:" + s.address().port + "/"));\n';
+// A small web app for browser checks: "/" works, "/broken" has console and page errors and a missing image
+const WEB_APP = `import http from "node:http";
+const ok = '<!doctype html><title>Counter</title><input id="n" value="0"><button id="inc">+1</button><b id="out">0</b>' +
+  '<script>console.log("ready"); document.getElementById("inc").onclick = () => { const v = Number(document.getElementById("n").value) + 1; document.getElementById("out").textContent = v; document.getElementById("n").value = v; };</script>';
+const broken = '<!doctype html><title>Broken</title><img src="/missing.png"><script>console.error("state is undefined"); setTimeout(() => { throw new Error("render crashed") }, 0);</script>';
+const s = http.createServer((q, r) => {
+  if (q.url === "/") { r.setHeader("content-type", "text/html"); return r.end(ok); }
+  if (q.url === "/broken") { console.error("Error: template not found for /broken"); r.setHeader("content-type", "text/html"); return r.end(broken); }
+  r.statusCode = 404; r.end();
+});
+s.listen(0, "127.0.0.1", () => console.log("Local: http://localhost:" + s.address().port + "/"));
+`;
+const image = (r) => r.content.find((c) => c.type === "image");
+
 const reachable = async (url) => {
   try { return await (await fetch(url.replace("localhost", "127.0.0.1"), { signal: AbortSignal.timeout(3000) })).text(); }
   catch { return null; }
@@ -52,7 +67,7 @@ try {
 
   await t("lists all tools", async () => {
     const { tools } = await client.listTools();
-    assert.equal(tools.length, 18, tools.map((x) => x.name).join(", "));
+    assert.equal(tools.length, 19, tools.map((x) => x.name).join(", "));
   });
 
   await t("detects an empty project", async () => {
@@ -246,7 +261,7 @@ try {
     const info = json(r);
     assert.ok(!r.isError && info.running, text(r));
     assert.match(info.url, /^http:\/\/localhost:\d+\/$/);
-    assert.match(info.next, /Check it with http_get/);
+    assert.match(info.next, /Open it with check_page/);
     assert.equal(await reachable(info.url), "dev ok");
 
     // The AI can verify its own dev server (localhost falls back to 127.0.0.1, where it listens)
@@ -267,6 +282,66 @@ try {
     assert.equal(stopped.running, false);
     assert.equal(await reachable(info.url), null);
     assert.ok((await call("http_get", { url: info.url })).isError, "a stopped server's port must not stay reachable");
+  });
+
+  await t("check_page: screenshot, clean console, and a clicked button really works", async () => {
+    await call("write_file", { path: "webapp.mjs", content: WEB_APP });
+    const app = json(await call("start_process", { command: "node webapp.mjs" }));
+    const r = await call("check_page", {
+      url: app.url,
+      steps: [{ click: "#inc" }, { click: "#inc" }, { type: "#n", text: "0" }],
+      evaluate: "document.getElementById('out').textContent",
+    });
+    const s = json(r);
+    assert.ok(!r.isError, text(r));
+    assert.equal(s.status, 200); assert.equal(s.title, "Counter");
+    assert.deepEqual(s.consoleErrors, []); assert.deepEqual(s.pageErrors, []); assert.deepEqual(s.failedRequests, []);
+    assert.deepEqual(s.consoleLogs, ["ready"]);
+    assert.equal(s.evaluate, "2");
+    assert.ok(s.steps.every((x) => x.ok), JSON.stringify(s.steps));
+    assert.match(s.next, /No errors\. Look at the screenshot/);
+    const png = Buffer.from(image(r).data, "base64");
+    assert.equal(image(r).mimeType, "image/png");
+    assert.equal(png.subarray(1, 4).toString(), "PNG"); assert.equal(png.readUInt32BE(16), 1280);
+
+    // Broken page: console error, uncaught error and the 404 image are all reported, and the AI is told to fix them
+    const b = await call("check_page", { url: app.url + "broken", viewport: "mobile" });
+    const bs = json(b);
+    assert.ok(b.isError);
+    assert.deepEqual(bs.consoleErrors, ["state is undefined"]);
+    assert.ok(bs.pageErrors.some((e) => e.includes("render crashed")), JSON.stringify(bs.pageErrors));
+    assert.ok(bs.failedRequests.some((f) => f.includes("/missing.png")) && !bs.failedRequests.some((f) => f.includes("favicon")), JSON.stringify(bs.failedRequests));
+    assert.match(bs.next, /Problems found\. Fix them/);
+    assert.equal(Buffer.from(image(b).data, "base64").readUInt32BE(16), 390);
+
+    // A step that can't run is reported instead of silently passing
+    const missing = json(await call("check_page", { url: app.url, steps: [{ click: "#does-not-exist" }] }));
+    assert.match(missing.steps[0].error, /no element matches #does-not-exist/);
+
+    // Server-side logs: the error line is surfaced under problems with a next step
+    const logs = json(await call("process_output", { id: app.id }));
+    assert.ok(logs.problems.some((l) => l.includes("template not found")), JSON.stringify(logs));
+    assert.match(logs.next, /Fix the cause yourself/);
+
+    // Same boundary as http_get: only dev servers started with start_process
+    const outside = await call("check_page", { url: "https://example.com/" });
+    assert.ok(outside.isError && /check_page only reaches dev servers/.test(text(outside)), text(outside));
+    await call("stop_process", { id: app.id });
+  });
+
+  await t("check_page opens a plain HTML project without a dev server, inside the jail", async () => {
+    await call("write_file", { path: "site/index.html", content: '<!doctype html><title>Plain</title><link rel="stylesheet" href="style.css"><button id="b" onclick="this.textContent=\'clicked\'">go</button>' });
+    await call("write_file", { path: "site/style.css", content: "button { color: red; }\n" });
+    const r = await call("check_page", { path: "site/index.html", steps: [{ click: "#b" }], evaluate: "document.getElementById('b').textContent" });
+    const s = json(r);
+    assert.ok(!r.isError, text(r));
+    assert.equal(s.title, "Plain"); assert.equal(s.evaluate, "clicked"); assert.deepEqual(s.failedRequests, []);
+    // The built-in file server only hands out project files, never secrets or anything outside
+    const base = new URL(s.url).origin;
+    assert.equal((await fetch(`${base}/site/style.css`)).status, 200);
+    for (const p of ["/.env", "/.jecbridge/token", "/..%2Foutside.txt", "/.git/config"]) assert.equal((await fetch(base + p)).status, 403, p);
+    assert.ok((await call("check_page", { path: "../outside.html" })).isError);
+    assert.ok((await call("check_page", {})).isError);
   });
 
   await t("task_plan keeps the AI from reporting 'done' while items are open", async () => {
@@ -392,6 +467,14 @@ try {
     assert.equal(assetName("darwin", "arm64"), "cloudflared-darwin-arm64.tgz");
     assert.equal(assetName("linux", "arm64"), "cloudflared-linux-arm64");
     assert.equal(assetName("freebsd", "x64"), null);
+  });
+
+  await t("headless Chrome download picks the right build for each platform", async () => {
+    assert.equal(cftPlatform("win32", "x64"), "win64");
+    assert.equal(cftPlatform("darwin", "arm64"), "mac-arm64");
+    assert.equal(cftPlatform("linux", "x64"), "linux64");
+    assert.equal(cftPlatform("linux", "arm64"), "linux-arm64");
+    assert.equal(cftPlatform("freebsd", "x64"), null);
   });
   console.log(`\n${passed} tests passed ✅`);
 } catch (e) {

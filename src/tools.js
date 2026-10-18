@@ -4,6 +4,7 @@ import path from "node:path";
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { VERSION } from "./version.js";
+import { checkPage } from "./browser.js";
 
 // How the AI must work, the way a coding agent like Claude Code does. Sent as server
 // instructions and repeated in project_info, because some clients ignore instructions.
@@ -11,7 +12,7 @@ export const WORKING_RULES = [
   "Do the work yourself with these tools. Never ask the user to copy, paste, create or edit files, or run commands: write files with write_file/edit_file and run commands with run_command/start_process.",
   "Never paste file contents into the chat instead of writing them. If your client refuses a write to some path, write to a temporary name (e.g. page.txt) and rename it with move_path.",
   "When something fails (an error, a failing test, a crashed server), read the output, fix the cause and run it again. Keep going until it works.",
-  "Verify before you report: run the tests or the build, start dev servers with start_process and check them with http_get, read process_output for errors.",
+  "Verify before you report, like a careful developer: run the tests or the build; start the dev server with start_process; open the page with check_page and look at the screenshot, the browser console errors and failed requests; test the main interactions with check_page steps (click, type) and evaluate; read the server logs with process_output. Fix every error you find and check again.",
   "For work with several steps, keep a task_plan and update it as you go. Never say the work is done while an item is still open or unverified.",
   "Reply with the result, not the process: what now works and where (files, URL). Ask the user only for what you cannot do yourself: a decision about what they want, credentials, or something outside this project.",
   "Safety rules are not obstacles to work around. If safe mode blocks a command, use an allowed alternative; if there is none, tell the user exactly what they would need to allow.",
@@ -40,7 +41,7 @@ export function createServer(ws, log = () => {}) {
         `You are the hands-on coding agent for a local project on the user's computer: ${path.basename(ws.root)}. ` +
         "Work like Claude Code. Rules:\n" + WORKING_RULES.map((r, i) => `${i + 1}. ${r}`).join("\n") + "\n" +
         "Start with project_info and list_files. Prefer edit_file over rewriting whole files. " +
-        "To run a dev server, use start_process, check it with http_get and give the user the URL. " +
+        "To run a dev server, use start_process, verify it with check_page (screenshot, console, interactions) and give the user the URL. " +
         (ws.hasGit
           ? "A checkpoint is taken automatically before every change; if something goes wrong, use list_checkpoints + undo. "
           : "Checkpoints and undo are OFF (git is not installed), so be careful with destructive changes. ") +
@@ -236,20 +237,25 @@ export function createServer(ws, log = () => {}) {
     const info = await ws.startProcess(command, { cwd, waitSec: wait_sec });
     info.next = !info.running
       ? (info.exitCode === 0 ? "The process finished; if it should keep running, check its output." : "The process crashed. Read its output, fix the cause and start it again yourself.")
-      : info.url ? `Check it with http_get ${info.url} before you give the user the URL.`
+      : info.url ? `Open it with check_page ${info.url} (screenshot, console errors, test the main interactions) before you give the user the URL.`
       : "No URL seen yet. Check process_output; if it is still starting, wait and look again.";
     return { ...ok(info), isError: !info.running && info.exitCode !== 0 };
   }));
 
   server.registerTool("process_output", {
     title: "Background process output",
-    description: "Recent output of a background process (errors, rebuilds) and whether it is still running. Without id: list all background processes.",
+    description: "Server-side logs of a background process and whether it is still running; error and warning lines from the whole log are collected under problems. " +
+      "Check it after changes and before you report. Without id: list all background processes.",
     inputSchema: {
       id: z.string().optional().describe("Process id from start_process, e.g. p1"),
       lines: z.number().int().min(1).max(1000).default(100),
     },
     annotations: ro,
-  }, safe(async ({ id, lines }) => ok(ws.processOutput(id, lines))));
+  }, safe(async ({ id, lines }) => {
+    const info = ws.processOutput(id, lines);
+    if (info.problems) info.next = "The log has errors or warnings (see problems). Fix the cause yourself, then check again with check_page.";
+    return ok(info);
+  }));
 
   server.registerTool("stop_process", {
     title: "Stop background process",
@@ -267,6 +273,56 @@ export function createServer(ws, log = () => {}) {
   }, safe(async ({ url }) => {
     const r = await ws.httpGet(url);
     return { ...ok(r), isError: r.status >= 400 };
+  }));
+
+  server.registerTool("check_page", {
+    title: "Check a page in a browser",
+    description: "Open a page in a real headless browser, the way a user would, and verify it before you report. " +
+      "Give url for a dev server started with start_process, or path for a plain HTML file in the project (e.g. index.html, no server needed). " +
+      "It returns: " +
+      "a screenshot, browser console messages (errors, warnings, logs), uncaught page errors and failed network requests. " +
+      "Optional steps let you test it: click buttons, type into inputs, press keys, wait for elements; evaluate reads a value from the page " +
+      "(e.g. document.querySelector('#result').textContent). Chrome or Edge is used if installed, otherwise headless Chrome is downloaded once.",
+    inputSchema: {
+      url: z.string().optional().describe("Dev server page, e.g. http://localhost:5173/"),
+      path: z.string().optional().describe("Or an HTML file in the project, e.g. index.html"),
+      steps: z.array(z.object({
+        click: z.string().optional().describe("CSS selector to click"),
+        type: z.string().optional().describe("CSS selector of an input to type into (with text)"),
+        text: z.string().optional(),
+        press: z.string().optional().describe("Key to press, e.g. Enter"),
+        wait_for: z.string().optional().describe("CSS selector to wait for (up to 10s)"),
+        wait_ms: z.number().int().min(0).max(10000).optional(),
+      })).max(50).default([]),
+      evaluate: z.string().optional().describe("JavaScript expression evaluated in the page after the steps; its value is returned"),
+      viewport: z.enum(["desktop", "mobile"]).default("desktop"),
+      full_page: z.boolean().default(false).describe("Screenshot the whole page instead of the visible part"),
+    },
+    annotations: ro,
+  }, safe(async ({ url, path: file, steps, evaluate, viewport, full_page }) => {
+    if (!url && !file) throw new Error("Give url (a dev server page) or path (an HTML file in the project).");
+    if (file) url = await ws.staticUrl(file);
+    else ws.devUrl(url, "check_page");
+    log("check_page", file || url);
+    const { report, screenshot } = await checkPage(url, { steps, evaluate, viewport, fullPage: full_page, log });
+    const errors = report.console.filter((c) => c.type === "error" || c.type === "assert").map((c) => c.text);
+    const warnings = report.console.filter((c) => c.type === "warning").map((c) => c.text);
+    const failedSteps = report.steps.filter((s) => !s.ok);
+    const problems = errors.length + report.pageErrors.length + report.failedRequests.length + failedSteps.length +
+      (report.status >= 400 ? 1 : 0);
+    const summary = {
+      url: report.url, finalUrl: report.finalUrl, status: report.status, title: report.title,
+      consoleErrors: errors, pageErrors: report.pageErrors, failedRequests: report.failedRequests,
+      consoleWarnings: warnings, consoleLogs: report.console.filter((c) => !["error", "assert", "warning"].includes(c.type)).slice(-20).map((c) => c.text),
+      steps: report.steps, ...(evaluate ? { evaluate: report.evaluate } : {}),
+      next: problems
+        ? "Problems found. Fix them, then run check_page again. Don't report the work as finished while there are errors."
+        : "No errors. Look at the screenshot and confirm the page looks and behaves the way the user asked before you report.",
+    };
+    return {
+      content: [{ type: "text", text: JSON.stringify(summary, null, 2) }, { type: "image", data: screenshot, mimeType: "image/png" }],
+      isError: problems > 0,
+    };
   }));
 
   server.registerTool("task_plan", {

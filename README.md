@@ -127,7 +127,8 @@ Then tell the AI: *"Build a Next.js + Tailwind landing page in this folder and c
 | `delete_path`, `move_path` | Delete, move, rename |
 | `run_command` | `npm install`, `npm test`, `python main.py`… |
 | `start_process` | Run a dev server or watcher in the background (`npm run dev`) and get its URL |
-| `process_output`, `stop_process` | Read a background process's logs, stop it |
+| `process_output`, `stop_process` | Read a background process's logs (errors are collected under `problems`), stop it |
+| `check_page` | Open a page in a headless browser: screenshot, console errors, failed requests; click and type to test it. Works for dev servers and plain HTML files |
 | `http_get` | Check a page or API of its own dev server (only ports started with `start_process`) |
 | `task_plan` | A checklist for multi-step work, so the AI doesn't report "done" too early |
 | `checkpoint`, `list_checkpoints` | Save and list project states |
@@ -140,7 +141,8 @@ JecBridge tells every connected AI to work the way Claude Code does, and backs i
 
 - **It does the work itself.** It never asks you to copy code, create files or run commands. Files are written with `write_file`, commands run with `run_command` and `start_process`.
 - **It fixes problems right away.** A failed command, a test error or a crashed server comes back with "fix the cause and try again yourself".
-- **It checks before it reports.** It runs the tests or the build, starts the dev server and opens it with `http_get`.
+- **It checks before it reports, like a careful developer.** It runs the tests or the build, opens the page in a real headless browser with `check_page`, looks at the screenshot, the console errors and failed requests, clicks through the main interactions, and reads the server logs. It fixes what it finds and checks again.
+  Chrome or Edge is used if installed, otherwise headless Chrome is downloaded once (~100 MB) into `~/.jecbridge/browser`.
 - **It doesn't say "done" early.** Multi-step work is tracked in `task_plan` until every item is verified.
 - **You get the result, not the process:** what works now and where.
 
@@ -216,7 +218,7 @@ Plain APIs like DeepSeek, Ollama or the OpenAI API need an agent with an MCP cli
 ## Tests
 
 ```bash
-npm test     # 36 end-to-end tests: build from scratch, edit, undo, security, dev servers, stdio, read-only, no-git
+npm test     # 39 end-to-end tests: build from scratch, edit, undo, security, dev servers, stdio, read-only, no-git
 ```
 
 ## License

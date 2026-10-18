@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.5.0 — 2026-10-18
+
+The AI now tests its work in a real browser before it reports.
+
+- New tool `check_page`: opens a page in a headless browser and returns a screenshot, browser console errors/warnings/logs, uncaught page errors and failed requests. Steps (click, type, press, wait_for) and `evaluate` let the AI test interactions, e.g. press 1 2 × 3 = and read the result. Desktop and mobile viewports, optional full-page screenshot
+- Works for dev servers started with `start_process` and for plain HTML projects (`path: "index.html"`) through a built-in file server that only serves project files (no secrets, no escapes)
+- Uses installed Chrome or Edge, otherwise downloads headless Chrome for Testing once into `~/.jecbridge/browser`
+- `process_output` collects error and warning lines from the whole log under `problems`
+- Working rules now require checking the page, the console and the server logs, and fixing every error before reporting
+- Dev servers that print `http://[::]:port` (e.g. Python's http.server) are recognized
+
 ## 0.4.0 — 2026-10-18
 
 The AI now works like a coding agent such as Claude Code.
