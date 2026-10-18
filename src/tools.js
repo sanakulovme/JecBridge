@@ -30,8 +30,11 @@ export function createServer(ws, log = () => {}) {
   // Automatic snapshot before every mutating call (no commit if nothing changed)
   const mutate = (label, fn) => safe(async (args) => {
     if (ws.readOnly) throw new Error("Server is running in read-only mode");
-    ws.checkpoint(`auto: before ${label}`);
-    log(label, args.path || args.command || "");
+    // Name the file or command in the label so the right checkpoint is easy to pick for undo
+    const target = args.path || (args.from ? `${args.from} → ${args.to}` : "") || args.command || "";
+    const what = target.length > 100 ? target.slice(0, 97) + "..." : target;
+    ws.checkpoint(`auto: before ${label} ${what}`.trim());
+    log(label, what);
     return fn(args);
   });
 
@@ -50,8 +53,8 @@ export function createServer(ws, log = () => {}) {
       "composer.json", "pom.xml", "README.md", "tsconfig.json", "vite.config.ts", "next.config.js"];
     const found = {};
     for (const m of markers) {
-      const p = path.join(ws.root, m);
-      if (fs.existsSync(p)) found[m] = fs.readFileSync(p, "utf8").slice(0, 3000);
+      // ws.resolve skips a key file that is a symlink pointing outside the project
+      try { const { abs } = ws.resolve(m); if (fs.existsSync(abs)) found[m] = fs.readFileSync(abs, "utf8").slice(0, 3000); } catch {}
     }
     return ok({
       name: path.basename(ws.root),

@@ -103,6 +103,27 @@ try {
     assert.equal(fs.readFileSync(path.join(dir, "win.txt"), "utf8"), "LINE 1\r\nLINE 2\r\nline three\r\n");
   });
 
+  await t("undo only the breaking change: the useful change before it stays", async () => {
+    await call("write_file", { path: "notes.txt", content: "v1\n" });
+    await call("edit_file", { path: "notes.txt", edits: [{ old_text: "v1", new_text: "v2 useful" }] });
+    await call("edit_file", { path: "notes.txt", edits: [{ old_text: "v2 useful", new_text: "v3 BROKEN" }] });
+    const cps = json(await call("list_checkpoints", { limit: 5 }));
+    // Newest first: the checkpoint taken right before the breaking edit, labeled with the file
+    assert.equal(cps[0].label, "auto: before edit_file notes.txt", JSON.stringify(cps));
+    await call("undo", { checkpoint_id: cps[0].id });
+    assert.equal(fs.readFileSync(path.join(dir, "notes.txt"), "utf8"), "v2 useful\n");
+  });
+
+  await t("checkpoint labels name the command or the moved paths", async () => {
+    // A checkpoint is only stored when something changed since the last one
+    await call("write_file", { path: "a.txt", content: "a\n" });
+    await call("run_command", { command: "node --version" });
+    await call("write_file", { path: "b.txt", content: "b\n" });
+    await call("move_path", { from: "notes.txt", to: "notes2.txt" });
+    const labels = json(await call("list_checkpoints", { limit: 2 })).map((c) => c.label);
+    assert.deepEqual(labels, ["auto: before move_path notes.txt → notes2.txt", "auto: before run_command node --version"]);
+  });
+
   await t("list_files on a subfolder", async () => {
     assert.match(text(await call("list_files", { dir: "src", max_depth: 1 })), /src\/math\.js/);
   });
@@ -119,6 +140,37 @@ try {
     catch { console.log("    (skipped: creating symlinks needs admin rights on Windows)"); return; }
     assert.ok((await call("write_file", { path: "evil/pwned.txt", content: "x" })).isError);
     fs.unlinkSync(path.join(dir, "evil"));
+  });
+
+  await t("a file symlink to a secret outside the project cannot be read, searched or overwritten", async () => {
+    const secret = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "cb-secret-")), "id_rsa_copy");
+    fs.writeFileSync(secret, "SSH_SECRET_MATERIAL");
+    try { fs.symlinkSync(secret, path.join(dir, "key-link"), "file"); }
+    catch { console.log("    (skipped: creating symlinks needs admin rights on Windows)"); return; }
+    try {
+      assert.ok((await call("read_file", { path: "key-link" })).isError);
+      for (const c of ["cat key-link", "node -e 0 key-link"]) {
+        const r = await call("run_command", { command: c });
+        assert.ok(r.isError && !text(r).includes("SSH_SECRET"), `${c}: ${text(r)}`);
+      }
+      assert.ok(!text(await call("search_code", { pattern: "SSH_SECRET" })).includes("SSH_SECRET"));
+      fs.renameSync(path.join(dir, "key-link"), path.join(dir, "README.md")); // a key file project_info reads
+      try { assert.ok(!text(await call("project_info")).includes("SSH_SECRET")); }
+      finally { fs.renameSync(path.join(dir, "README.md"), path.join(dir, "key-link")); }
+      assert.ok((await call("write_file", { path: "key-link", content: "overwrite" })).isError);
+      assert.equal(fs.readFileSync(secret, "utf8"), "SSH_SECRET_MATERIAL");
+    } finally { fs.unlinkSync(path.join(dir, "key-link")); }
+  });
+
+  await t("repeated wrong tokens: warned, then that caller is blocked (others are not)", async () => {
+    const hit = (tok, ip) => fetch(`http://127.0.0.1:${PORT}/mcp/${tok}`, {
+      method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream", "cf-connecting-ip": ip },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+    }).then((r) => r.status);
+    for (let i = 0; i < 20; i++) assert.equal(await hit("wrong", "203.0.113.9"), 401);
+    assert.equal(await hit("wrong", "203.0.113.9"), 429);
+    assert.equal(await hit(TOKEN, "203.0.113.9"), 429);
+    assert.equal(await hit(TOKEN, "198.51.100.7"), 200);
   });
 
   await t("secrets and .git are protected (any letter case)", async () => {
@@ -267,6 +319,24 @@ try {
       assert.ok(out.includes(fs.realpathSync(here)), out);
       assert.match(out, /127\.0\.0\.1:(878[89]|879\d|880\d)\//, out);
     } finally { p.kill(); blocker.close(); }
+  });
+
+  await t("--new-token replaces the saved token", async () => {
+    const tDir = fs.mkdtempSync(path.join(os.tmpdir(), "cb-tok-"));
+    fs.mkdirSync(path.join(tDir, ".jecbridge"));
+    fs.writeFileSync(path.join(tDir, ".jecbridge/token"), "old-token-value");
+    const p = spawn(process.execPath, [CLI, tDir, "--new-token", "--port", "8911"], { stdio: "pipe" });
+    let out = "";
+    try {
+      await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error("no banner:\n" + out)), 20_000);
+        const on = (d) => { out += d; if (/Local: +http/.test(out)) { clearTimeout(timer); resolve(); } };
+        p.stdout.on("data", on); p.stderr.on("data", on);
+      });
+      const saved = fs.readFileSync(path.join(tDir, ".jecbridge/token"), "utf8");
+      assert.notEqual(saved, "old-token-value");
+      assert.ok(out.includes(`/mcp/${saved}`) && /old connector URLs no longer work/.test(out), out);
+    } finally { p.kill(); }
   });
 
   await t("refuses to serve the home folder by accident", async () => {

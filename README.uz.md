@@ -68,8 +68,8 @@ npx jecbridge ~/projects/my-app --tunnel
 
 Terminal `https://xxxx.trycloudflare.com/mcp/<token>` ko'rinishidagi public URL chiqaradi va uni clipboard'ga nusxalaydi. cloudflared o'rnatilmagan bo'lsa, rasmiy dastur Cloudflare'ning GitHub sahifasidan bir marta `~/.jecbridge/bin` ga yuklab olinadi.
 
-> ⚠️ URL ichida maxfiy token bor, uni hech kimga bermang. Token `.jecbridge/token` faylida saqlanadi. Yangilash uchun shu faylni o'chiring.
-> Quick tunnel URL'i har ishga tushirishda o'zgaradi. Doimiy manzil uchun Cloudflare named tunnel yoki ngrok static domain ishlating.
+> ⚠️ URL ichida maxfiy token bor, uni hech kimga bermang. Agar u oshkor bo'lib qolsa, `--new-token` bilan qayta ishga tushiring: shunda barcha eski URL'lar ishlamay qoladi.
+> Quick tunnel URL'i har ishga tushirishda o'zgaradi. Doimiy manzil uchun [Tunnel URL xavfsizligi](#tunnel-url-xavfsizligi) bo'limiga qarang.
 
 ## 2. Local klientlar (stdio)
 
@@ -109,6 +109,7 @@ Keyin AI'ga yozing: *"Shu papkada Next.js + Tailwind landing page qur, `npm run 
 | `--host <h>` | HTTP host (standart `127.0.0.1`) |
 | `--tunnel` | Web AI'lar uchun public HTTPS URL (cloudflared avtomatik yuklab olinadi) |
 | `--token <t>` | Maxfiy token (standart: yaratiladi va saqlanadi; `JECBRIDGE_TOKEN` ham ishlaydi) |
+| `--new-token` | Saqlangan tokenni almashtiradi, barcha eski URL'lar ishlamay qoladi |
 | `--read-only` | Yozish yo'q, buyruq yo'q, loyihaga hech narsa saqlanmaydi |
 | `--allow <a,b,c>` | Buyruqlar ro'yxatini almashtirish |
 | `--allow-all-commands` | Istalgan shell buyrug'iga ruxsat (ehtiyot bo'ling) |
@@ -131,9 +132,31 @@ Keyin AI'ga yozing: *"Shu papkada Next.js + Tailwind landing page qur, `npm run 
 | `diff` | Checkpointdan beri nima o'zgargani |
 | `undo` | Checkpointga qaytish (undo'ning o'zi ham qaytariladi) |
 
+## Undo: xato o'zgarishdan qanday tiklanish
+
+Har bir o'zgarishdan oldin avtomatik checkpoint olinadi va unga fayl yoki buyruq nomi yoziladi, masalan `auto: before edit_file src/math.js`. Tasavvur qiling, AI avval foydali o'zgarish qildi, keyin nimanidir buzadigan ikkinchi o'zgarish qildi:
+
+1. Yozing: *"Checkpointlarni ko'rsat."* AI `list_checkpoints` ni chaqiradi, eng yangisi tepada bo'ladi:
+   ```
+   a1b2c3d  auto: before edit_file src/math.js     ← buzuvchi o'zgarishdan oldin olingan
+   e4f5a6b  auto: before edit_file src/math.js     ← foydali o'zgarishdan oldin olingan
+   ```
+2. Yozing: *"a1b2c3d ga undo qil."* Buzuvchi o'zgarish qaytariladi, foydalisi joyida qoladi.
+3. Fikringiz o'zgardimi? Undo'dan oldingi holat ham saqlangan (`redoId`), shuning uchun undo'ning o'zini ham qaytarish mumkin.
+
+Undo nimani tiklaydi va nimani tiklamaydi:
+
+| Tiklanadi | Tiklanmaydi |
+|---|---|
+| Loyihadagi fayllar, jumladan o'chirilgan va yangi fayllar | E'tiborsiz qoldiriladigan papkalar: `node_modules`, `dist`, `build`, `.venv`, `.env*` va `.gitignore` dagi hamma narsa |
+| | Buyruqlarning tashqi ta'siri: global o'rnatishlar, ma'lumotlar bazasi, API chaqiruvlar, emaillar, o'z repongizdagi `git` amallari |
+| | Loyiha papkasidan tashqaridagi hamma narsa |
+
+Bu "bitta o'zgarishni bekor qilish" emas, "nuqtaga qaytish": tanlangan checkpoint'dan keyingi hamma narsa qaytariladi.
+
 ## Xavfsizlik
 
-- **Papka qamog'i.** `../`, absolyut yo'llar va symlink orqali loyihadan tashqariga chiqib bo'lmaydi.
+- **Papka qamog'i.** `../`, absolyut yo'llar va symlink orqali loyihadan tashqariga chiqib bo'lmaydi. Har bir yo'l tekshiruvdan oldin `realpath` bilan hal qilinadi. Shuning uchun `~/.ssh` ga ishora qiluvchi symlink fayl tool'lari, qidiruv, `project_info` va buyruq argumentlarida bir xilda rad etiladi.
 - **Maxfiy fayllar yopiq.** `.env*`, `.git/`, `*.pem`, `*.key`, SSH kalitlar o'qilmaydi, yozilmaydi va qidiruvda ko'rinmaydi.
 - **Buyruqlar allowlist'da.** Standart holatda faqat `npm`, `node`, `python`, `pytest`, `go`, `cargo`… ruxsat etilgan. `&&`, `|`, `;`, `$(` zanjirlari, `git push` va `git -C` / `--git-dir` bloklangan.
   - Buyruq argumentlari ham tekshiriladi: `cat .env`, `cat ../fayl`, `ls /`, `--prefix=..` ishlamaydi.
@@ -143,12 +166,32 @@ Keyin AI'ga yozing: *"Shu papkada Next.js + Tailwind landing page qur, `npm run 
   - Ro'yxatni o'zgartirish: `--allow npm,node,python`
   - Hammasiga ruxsat: `--allow-all-commands`. Faqat o'zingizga tegishli mashinada va ishonchli AI bilan ishlating.
 - **Checkpointlar alohida.** Ular `.jecbridge/shadow.git` ichida saqlanadi. Sizning `.git` tarixingizga tegilmaydi.
-- **Token.** Har bir HTTP so'rov uchun majburiy: URL ichida yoki `Authorization: Bearer`.
+- **Token.** Har bir HTTP so'rov uchun tasodifiy 192-bitli token majburiy: URL ichida yoki `Authorization: Bearer`. Noto'g'ri token bilan kelgan so'rovlar yuboruvchining IP manzili bilan logga yoziladi. 10 daqiqada 20 marta xato qilgan manzil bloklanadi.
 - **`--read-only`.** Faqat o'qish rejimi (kod review uchun). Loyiha papkasiga hech narsa yozilmaydi, server ma'lumotlari vaqtinchalik papkada saqlanadi.
 
 > ⚠️ **Xavfsiz rejim sandbox emas.** `node`, `python`, `npm test` kabi ruxsat etilgan dasturlar loyiha kodini bajaradi, bu kod esa diskdagi istalgan faylni o'qiy oladi. Allowlist tasodifiy xatolardan himoya qiladi, yomon niyatli AI yoki loyihadan emas. To'liq izolyatsiya kerak bo'lsa, JecBridge'ni Docker konteyner yoki alohida foydalanuvchi ichida ishga tushiring.
 
 > `.jecbridge/` papkasini o'z `.gitignore` faylingizga qo'shing.
+
+### Tunnel URL xavfsizligi
+
+`--tunnel` rejimida URL'ning o'zi maxfiy kalit: u kimda bo'lsa, sizning AI'ingiz bilan bir xil huquqqa ega bo'ladi.
+
+- **Quick tunnel qisqa umrli.** JecBridge to'xtatilganda URL o'ladi, har ishga tushirishda yangisi yaratiladi.
+- **URL oshkor bo'ldimi?** `--new-token` bilan qayta ishga tushiring. Eski URL'lar `401 Unauthorized` oladi.
+- **Terminalni kuzating.** Rad etilgan har bir so'rov yuboruvchining IP manzili bilan ko'rsatiladi.
+
+Doimiy manzil va qo'shimcha himoya uchun JecBridge'ni `--tunnel` siz ishga tushirib, oldiga o'zingizning **Cloudflare named tunnel**'ingizni qo'ying. Buning uchun bepul Cloudflare akkaunti va domen kerak:
+
+```bash
+npx jecbridge my-app                       # http://127.0.0.1:8787 da ishlaydi
+cloudflared tunnel login
+cloudflared tunnel create jecbridge
+cloudflared tunnel route dns jecbridge mcp.example.com
+cloudflared tunnel run --url http://127.0.0.1:8787 jecbridge
+```
+
+Keyin `mcp.example.com` oldiga **Cloudflare Access** qo'yishingiz mumkin: Zero Trust → Access → Applications. Lekin web AI serverlari Access'ning interaktiv login oynasidan o'ta olmaydi. Custom header yubora oladigan klientlar uchun Access **service token** ishlating, JecBridge token'ini esa ikkinchi himoya qatlami sifatida qoldiring.
 
 ## MCP'ni qo'llamaydigan provayderlar
 
@@ -159,7 +202,7 @@ DeepSeek, Ollama, OpenAI API kabi oddiy API'lar uchun MCP klientli agent kerak. 
 ## Sinov
 
 ```bash
-npm test     # 28 ta e2e sinov: noldan qurish, tahrir, undo, xavfsizlik, dev server, stdio, read-only, git'siz rejim
+npm test     # 33 ta e2e sinov: noldan qurish, tahrir, undo, xavfsizlik, dev server, stdio, read-only, git'siz rejim
 ```
 
 ## Litsenziya

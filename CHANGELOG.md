@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.0 — 2026-10-18
+
+Based on feedback from the AI Automation Society community.
+
+- **Security fix:** a symlink inside the project pointing to a file outside it could be read through `search_code` (when ripgrep is not installed) and through `project_info` key files. Both now go through the folder jail like every other tool.
+- `--new-token` replaces the saved token, so a leaked URL stops working
+- Wrong tokens are logged with the caller's IP (taken from Cloudflare's CF-Connecting-IP behind the tunnel); after 20 failures in 10 minutes that caller gets 429
+- Checkpoint labels name the file or command, e.g. `auto: before edit_file src/math.js`, so the right one is easy to pick for undo
+- README: an undo walkthrough with what undo does and doesn't restore, and a tunnel URL security guide (named tunnel, Cloudflare Access)
+
 ## 0.2.1 — 2026-10-17
 
 - Logo in the README (npm and GitHub)

@@ -370,7 +370,8 @@ export class Workspace {
     const re = new RegExp(pattern, ci ? "i" : "");
     const res = [];
     for (const f of this.listFiles(".", 50, 20000).files) {
-      let text; try { text = fs.readFileSync(path.join(this.root, f), "utf8"); } catch { continue; }
+      // resolve() follows symlinks and rejects ones that point outside the project
+      let text; try { text = fs.readFileSync(this.resolve(f).abs, "utf8"); } catch { continue; }
       text.split("\n").forEach((l, i) => { if (res.length < max && re.test(l)) res.push(`${f}:${i + 1}:${l.slice(0, 300)}`); });
     }
     return res.join("\n") || "(no matches)";

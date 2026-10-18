@@ -30,6 +30,7 @@ Options:
   --host <h>              HTTP host (default: 127.0.0.1)
   --tunnel                public HTTPS URL for web AIs (cloudflared is downloaded automatically)
   --token <t>             secret token (default: generated and saved)
+  --new-token             replace the saved token, so every old URL stops working
   --read-only             read-only mode (no writes, no commands, nothing saved in the project)
   --allow-all-commands    allow any shell command (USE WITH CARE)
   --allow <a,b,c>         replace the command allowlist
@@ -64,6 +65,7 @@ function parseArgs(argv) {
     }
     else if (a === "--host") o.host = value(++i, a);
     else if (a === "--token") o.token = value(++i, a);
+    else if (a === "--new-token") o.newToken = true;
     else if (a === "--allow") {
       o.allow = value(++i, a).split(",").map((s) => s.trim()).filter(Boolean);
       if (!o.allow.length) usageError("--allow needs at least one command, e.g. --allow npm,node");
@@ -112,8 +114,12 @@ async function startHttp() {
   const tokenFile = path.join(ws.metaDir, "token");
   let token = opts.token || process.env.JECBRIDGE_TOKEN;
   if (!token) {
-    if (fs.existsSync(tokenFile)) token = fs.readFileSync(tokenFile, "utf8").trim();
-    else { token = crypto.randomBytes(24).toString("base64url"); fs.writeFileSync(tokenFile, token, { mode: 0o600 }); }
+    if (fs.existsSync(tokenFile) && !opts.newToken) token = fs.readFileSync(tokenFile, "utf8").trim();
+    else {
+      token = crypto.randomBytes(24).toString("base64url");
+      fs.writeFileSync(tokenFile, token, { mode: 0o600 });
+      if (opts.newToken) console.error("New token generated: old connector URLs no longer work.");
+    }
   }
   const tokenBuf = Buffer.from(token);
   // Compare byte lengths: timingSafeEqual throws on buffers of different size (e.g. non-ASCII input)
@@ -137,11 +143,31 @@ async function startHttp() {
 
   app.get("/", (_req, res) => res.type("text").send("JecBridge is running. Endpoint: /mcp/<token> or /mcp with Authorization: Bearer <token>"));
 
+  // Failed attempts per caller. Behind the tunnel every request comes from 127.0.0.1,
+  // so the real caller is taken from Cloudflare's CF-Connecting-IP header.
+  const failures = new Map();
+  const FAIL_WINDOW_MS = 10 * 60_000, FAIL_LIMIT = 20;
+  const callerOf = (req) => String(req.headers["cf-connecting-ip"] || req.ip);
+
   // Two auth styles: token in the URL path (easy for claude.ai/ChatGPT connectors) or a Bearer header
   const auth = (req, res, next) => {
+    const caller = callerOf(req);
+    const now = Date.now();
+    const f = failures.get(caller);
+    if (f && now - f.since > FAIL_WINDOW_MS) failures.delete(caller);
+    const recent = failures.get(caller);
+    if (recent && recent.count >= FAIL_LIMIT) {
+      res.setHeader("Retry-After", String(Math.ceil((recent.since + FAIL_WINDOW_MS - now) / 1000)));
+      return res.status(429).json({ jsonrpc: "2.0", error: { code: -32001, message: "Too many failed attempts" }, id: null });
+    }
     const bearer = (req.headers.authorization || "").replace(/^Bearer\s+/i, "");
     if (valid(req.params.token) || valid(bearer)) return next();
-    log("REJECTED: invalid token from", req.ip);
+    const entry = recent || { since: now, count: 0 };
+    entry.count++;
+    failures.set(caller, entry);
+    if (failures.size > 1000) for (const [k, v] of failures) if (now - v.since > FAIL_WINDOW_MS) failures.delete(k);
+    log(`WARNING: rejected a request with a wrong token from ${caller} (${entry.count} in the last 10 min).` +
+      (entry.count === FAIL_LIMIT ? " Blocking this caller for 10 minutes. If your URL leaked, restart with --new-token." : ""));
     res.status(401).json({ jsonrpc: "2.0", error: { code: -32001, message: "Unauthorized" }, id: null });
   };
 
@@ -201,6 +227,7 @@ async function startHttp() {
 │ Gemini:     Settings → Connected Apps → Add a custom app
 │
 │ WARNING: never share this URL — it contains your secret token.
+│ If it leaks, restart with --new-token to make it useless.
 │ Keep this window open. Press Ctrl+C to stop.
 └───────────────────────────────────────────────────────────`);
 }
