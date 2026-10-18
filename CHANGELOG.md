@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.1 — 2026-10-18
+
+- Logo readable on the npm page in dark mode: npm shows only one image, so it now gets a logo on its own dark badge (GitHub still switches light/dark logos)
+
 ## 0.6.0 — 2026-10-18
 
 Based on feedback from the AI Automation Society community: a read is a copy into the AI chat.

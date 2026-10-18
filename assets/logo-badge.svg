@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 392 120" width="392" height="120" role="img" aria-label="JecBridge">
+  <!-- Logo on its own dark badge: readable on light and dark pages alike (npm shows only one image) -->
+  <rect width="392" height="120" rx="24" fill="#0D1117"/>
+  <g transform="translate(24 20)">
+    <path d="M72 8 L72 46" stroke="#3B82F6" stroke-width="8" stroke-linecap="round"/>
+    <path d="M72 46 A30 30 0 0 1 12 46" fill="none" stroke="#3B82F6" stroke-width="8" stroke-linecap="round"/>
+    <path d="M2 46 L92 46" stroke="#10B981" stroke-width="6" stroke-linecap="round"/>
+    <path d="M24 49 L24 65 M42 49 L42 71 M60 49 L60 65" stroke="#10B981" stroke-width="3" stroke-linecap="round"/>
+  </g>
+  <text x="132" y="76" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="44" font-weight="600" letter-spacing="-0.5"><tspan fill="#3B82F6">Jec</tspan><tspan fill="#F9FAFB">Bridge</tspan></text>
+</svg>
