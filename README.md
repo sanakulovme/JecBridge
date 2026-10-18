@@ -235,6 +235,14 @@ Heads-up: the AI can read these files, and whatever it reads is copied into the 
 If they hold real or customer data, hide them: add patterns to .jecbridgeignore (e.g. *.csv) or restart with --deny "*.csv,*.sql".
 ```
 
+**Indirect reads are redacted too, as far as possible.** The tools can't read a hidden file, but code the AI runs can: a script that follows a config to a bigger export, or a dev server that serves it. So JecBridge fingerprints the lines of every hidden file (`.env`, keys and your ignore patterns) and scrubs them from everything that goes back to the AI: `run_command`, `run_skill_script`, background process logs, `http_get` and the text `check_page` returns.
+
+| Caught | Not caught |
+|---|---|
+| A hidden line printed as is, or inside a longer line (HTML, JSON, logs) | Transformed data: sums, reformatting, translations |
+| Single values from hidden files: emails, keys, ids, phone numbers | Short values and plain words (under 8 characters, no digits or @) |
+| `.env` values printed by a script | What a screenshot shows, and files outside the project |
+
 For client work, prefer a copy of the repo without real data, or a provider and plan whose data settings you have checked.
 
 ## Security
@@ -285,7 +293,7 @@ Plain APIs like DeepSeek, Ollama or the OpenAI API need an agent with an MCP cli
 ## Tests
 
 ```bash
-npm test     # 44 end-to-end tests: build from scratch, edit, undo, security, dev servers, stdio, read-only, no-git
+npm test     # 45 end-to-end tests: build from scratch, edit, undo, security, dev servers, stdio, read-only, no-git
 ```
 
 ## License

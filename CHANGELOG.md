@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.8.0 — 2026-10-19
+
+Indirect reads, raised by the AI Automation Society community: the ignore list stops the tools, but a script the AI runs can still read a hidden file.
+
+- Lines of every hidden file (`.env`, keys, `.jecbridgeignore` / `--deny` matches) are fingerprinted and redacted from everything that goes back to the AI: `run_command`, `run_skill_script`, background process logs, `http_get` bodies and `check_page` console/evaluate text
+- Catches a hidden line printed as is or inside a longer line (HTML, JSON, logs), and single values such as emails, keys, ids and phone numbers
+- README says plainly what is not caught: transformed data, short plain words, screenshots, files outside the project
+
 ## 0.7.0 — 2026-10-18
 
 Skills: the same SKILL.md format as Claude Code, for any AI.

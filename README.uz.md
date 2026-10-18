@@ -235,6 +235,14 @@ Heads-up: the AI can read these files, and whatever it reads is copied into the 
 If they hold real or customer data, hide them: add patterns to .jecbridgeignore (e.g. *.csv) or restart with --deny "*.csv,*.sql".
 ```
 
+**Bilvosita o'qishlar ham imkon qadar yashiriladi.** Tool'lar yashirilgan faylni o'qiy olmaydi, lekin AI ishga tushirgan kod o'qiy oladi. Masalan, config'dagi yo'l orqali kattaroq eksportga yetib boradigan skript yoki shu faylni beradigan dev server. Shuning uchun JecBridge har bir yashirilgan faylning qatorlarini eslab qoladi (`.env`, kalitlar va sizning pattern'laringiz) va AI'ga qaytadigan hamma narsadan ularni olib tashlaydi: `run_command`, `run_skill_script`, fon jarayonlari loglari, `http_get` va `check_page` qaytaradigan matn.
+
+| Ushlanadi | Ushlanmaydi |
+|---|---|
+| Yashirilgan qator o'zicha yoki uzunroq qator ichida (HTML, JSON, loglar) chiqsa | O'zgartirilgan ma'lumot: yig'indi, qayta formatlash, tarjima |
+| Yashirilgan fayldagi alohida qiymatlar: email, kalit, ID, telefon raqami | Qisqa qiymatlar va oddiy so'zlar (8 belgidan kam, raqam yoki @ siz) |
+| Skript chiqargan `.env` qiymatlari | Skrinshotda ko'ringan narsa va loyihadan tashqaridagi fayllar |
+
 Mijoz loyihalarida haqiqiy ma'lumotlarsiz nusxa bilan ishlang yoki ma'lumot sozlamalarini tekshirgan provayder va tarifdan foydalaning.
 
 ## Xavfsizlik
@@ -285,7 +293,7 @@ DeepSeek, Ollama, OpenAI API kabi oddiy API'lar uchun MCP klientli agent kerak. 
 ## Sinov
 
 ```bash
-npm test     # 44 ta e2e sinov: noldan qurish, tahrir, undo, xavfsizlik, dev server, stdio, read-only, git'siz rejim
+npm test     # 45 ta e2e sinov: noldan qurish, tahrir, undo, xavfsizlik, dev server, stdio, read-only, git'siz rejim
 ```
 
 ## Litsenziya

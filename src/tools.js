@@ -321,6 +321,12 @@ export function createServer(ws, log = () => {}) {
     else ws.devUrl(url, "check_page");
     log("check_page", file || url);
     const { report, screenshot } = await checkPage(url, { steps, evaluate, viewport, fullPage: full_page, log });
+    // The page may print data from hidden files (e.g. a dev server serving a hidden CSV): redact text results
+    const deep = (v) => typeof v === "string" ? ws.redact(v) : Array.isArray(v) ? v.map(deep)
+      : v && typeof v === "object" ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, deep(x)])) : v;
+    report.console = report.console.map((c) => ({ ...c, text: ws.redact(c.text) }));
+    report.pageErrors = deep(report.pageErrors);
+    if (evaluate) report.evaluate = deep(report.evaluate);
     const errors = report.console.filter((c) => c.type === "error" || c.type === "assert").map((c) => c.text);
     const warnings = report.console.filter((c) => c.type === "warning").map((c) => c.text);
     const failedSteps = report.steps.filter((s) => !s.ok);

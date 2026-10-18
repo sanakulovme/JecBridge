@@ -73,7 +73,17 @@ const MIME = {
   ".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
   ".webp": "image/webp", ".ico": "image/x-icon", ".woff": "font/woff", ".woff2": "font/woff2", ".txt": "text/plain; charset=utf-8",
 };
-const PROBLEM_LINE = /\b(error|exception|failed|failure|cannot|can't|not found|traceback|panic|fatal|warn(ing)?)\b|ERR!|✘|✖/i;
+// Redaction of hidden-file content in command output
+const REDACT_MIN_LINE = 6;           // shorter lines ("}", "id,a") are too common to mean anything
+const REDACT_MAX_FILE = 50 * 1024 * 1024;
+const REDACT_MAX_LINES = 2_000_000;
+const lineHash = (s) => crypto.createHash("sha1").update(s).digest("base64").slice(0, 16);
+const SUBSTRING_MAX = 5_000;          // beyond this, only whole lines and single values are matched (speed)
+// A single value inside a line: split on separators used by CSV, .env, JSON, logs and HTML
+const FIELD = /[^,;\t|=:"'`\s<>(){}[\]]{8,}/g;
+// Values that look like data rather than ordinary words: emails, keys, ids, phone numbers
+const dataLike = (f) => /[\d@]/.test(f) || f.length >= 20;
+const PROBLEM_LINE =/\b(error|exception|failed|failure|cannot|can't|not found|traceback|panic|fatal|warn(ing)?)\b|ERR!|✘|✖/i;
 
 function killTree(child) {
   if (!child.pid) return;
@@ -100,6 +110,8 @@ export class Workspace {
   processes = new Map();
   #nextProcessId = 0;
   #static = null;
+  #fingerprints = null;
+  #fingerprintsAt = 0;
 
   constructor(root, opts = {}) {
     this.root = fs.realpathSync(path.resolve(root));
@@ -154,6 +166,60 @@ export class Workspace {
   }
 
   // Readable files that look like real data (CSV exports, SQL dumps, databases, fixtures), grouped by kind
+  // Hashes of the lines of every hidden file (.env, keys, .jecbridgeignore / --deny matches), so output
+  // that echoes them verbatim can be caught: a script the AI runs may read a hidden file the tools can't.
+  #hiddenLines() {
+    if (this.#fingerprints && Date.now() - this.#fingerprintsAt < 10_000) return this.#fingerprints;
+    const map = new Map();      // whole lines
+    const fields = new Map();   // values inside lines: emails, keys, ids
+    const longLines = [];       // for finding a hidden line inside a longer output line
+    let scanned = 0;
+    const visit = (dirRel) => {
+      let entries;
+      try { entries = fs.readdirSync(path.join(this.root, dirRel), { withFileTypes: true }); } catch { return; }
+      for (const e of entries) {
+        if (++scanned > 50_000 || map.size > REDACT_MAX_LINES) return;
+        const p = dirRel === "." ? e.name : `${dirRel}/${e.name}`;
+        if (e.isDirectory()) { if (!SKIP_DIRS.has(e.name.toLowerCase())) visit(p); continue; }
+        if (!e.isFile() || !this.isDenied(p)) continue;
+        let buf;
+        try { if (fs.statSync(path.join(this.root, p)).size > REDACT_MAX_FILE) continue; buf = fs.readFileSync(path.join(this.root, p)); } catch { continue; }
+        if (buf.subarray(0, 8000).includes(0)) continue; // binary
+        for (const line of buf.toString("utf8").split("\n")) {
+          const t = line.trim();
+          if (t.length < REDACT_MIN_LINE) continue;
+          map.set(lineHash(t), p);
+          if (t.length >= 12 && longLines.length <= SUBSTRING_MAX) longLines.push([t, p]);
+          for (const f of t.match(FIELD) || []) if (dataLike(f)) fields.set(lineHash(f), p);
+        }
+      }
+    };
+    visit(".");
+    this.#fingerprints = { lines: map, fields, longLines: longLines.length <= SUBSTRING_MAX ? longLines : [] };
+    this.#fingerprintsAt = Date.now();
+    return this.#fingerprints;
+  }
+
+  // Replace lines that come verbatim from a hidden file before they reach the AI
+  redact(text) {
+    if (typeof text !== "string" || !text) return text;
+    const { lines, fields, longLines } = this.#hiddenLines();
+    if (!lines.size) return text;
+    let changed = false;
+    const out = text.split("\n").map((line) => {
+      const t = line.trim();
+      const file = t.length >= REDACT_MIN_LINE && lines.get(lineHash(t));
+      if (file) { changed = true; return `[hidden: a line from ${file}]`; }
+      // A hidden line inside a longer one (HTML, JSON, a log prefix), then single values (emails, keys, ids)
+      let l = line;
+      for (const [hidden, from] of longLines) if (l.includes(hidden)) l = l.split(hidden).join(`[hidden: a line from ${from}]`);
+      l = l.replace(FIELD, (f) => (dataLike(f) && fields.has(lineHash(f)) ? "[hidden]" : f));
+      if (l !== line) changed = true;
+      return l;
+    });
+    return changed ? out.join("\n") : text;
+  }
+
   exposureReport(maxScan = 20_000) {
     const groups = new Map();
     let scanned = 0;
@@ -400,7 +466,7 @@ export class Workspace {
       child.on("error", (e) => done({ exitCode: -1, output: String(e.message) }));
       child.on("close", (code) => {
         if (out.length >= cap) out = out.slice(0, cap) + "\n[...output truncated]";
-        done({ exitCode: code, output: out });
+        done({ exitCode: code, output: this.redact(out) });
       });
     });
   }
@@ -501,7 +567,7 @@ export class Workspace {
           url, status: res.status, contentType: type,
           ...(res.headers.get("location") ? { redirectsTo: res.headers.get("location") } : {}),
           ...(title !== undefined ? { title: title.trim() } : {}),
-          body: textual ? body.slice(0, HTTP_BODY_MAX) : `(${type} body not shown)`,
+          body: textual ? this.redact(body.slice(0, HTTP_BODY_MAX)) : `(${type} body not shown)`,
           ...(body.length > HTTP_BODY_MAX ? { truncated: true } : {}),
         };
       } catch (e) { lastError = e; }
@@ -519,9 +585,9 @@ export class Workspace {
     const info = { id: p.id, command: p.command, cwd: p.cwd, running: p.exitCode === null, exitCode: p.exitCode, url: p.url, startedAt: p.startedAt };
     if (lines > 0) {
       const all = p.out.split(/\r?\n/);
-      info.output = all.slice(-lines).join("\n").trim();
+      info.output = this.redact(all.slice(-lines).join("\n").trim());
       // Error-looking lines from the whole log, so they aren't missed in a long output
-      const problems = [...new Set(all.filter((l) => PROBLEM_LINE.test(l)).map((l) => l.trim()))].slice(-20);
+      const problems = [...new Set(all.filter((l) => PROBLEM_LINE.test(l)).map((l) => this.redact(l.trim())))].slice(-20);
       if (problems.length) info.problems = problems;
     }
     return info;

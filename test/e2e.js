@@ -489,6 +489,50 @@ try {
     } finally { await b.c.close(); }
   });
 
+  await t("indirect reads: hidden-file lines printed by scripts, servers or pages are redacted", async () => {
+    const rDir = fs.mkdtempSync(path.join(os.tmpdir(), "cb-redact-"));
+    fs.mkdirSync(path.join(rDir, "data"));
+    fs.writeFileSync(path.join(rDir, "data/customers.csv"), "id,name,email\n1,Alice Smith,alice@corp.example\n2,Bob Stone,bob@corp.example\n");
+    fs.writeFileSync(path.join(rDir, ".env"), "STRIPE_KEY=sk_live_redact_me_123\n");
+    fs.writeFileSync(path.join(rDir, ".jecbridgeignore"), "*.csv\n");
+    // A config that points at the export, and a script that follows it: the classic indirect read
+    fs.writeFileSync(path.join(rDir, "config.json"), '{ "export": "data/customers.csv" }');
+    fs.writeFileSync(path.join(rDir, "report.mjs"), [
+      'import fs from "node:fs";',
+      'const { export: file } = JSON.parse(fs.readFileSync("config.json", "utf8"));',
+      'console.log("rows:"); console.log(fs.readFileSync(file, "utf8"));',
+      'console.log(fs.readFileSync(".env", "utf8"));',
+      '// only one column, on one line: single values are caught too',
+      'console.log("emails: " + fs.readFileSync(file, "utf8").trim().split("\\n").slice(1).map((l) => l.split(",")[2]).join(" "));',
+      'console.log("key=" + fs.readFileSync(".env", "utf8").split("=")[1].trim());',
+      'console.log("total: 2 customers");', ""].join("\n"));
+    fs.writeFileSync(path.join(rDir, "server.mjs"), [
+      'import http from "node:http"; import fs from "node:fs";',
+      'const s = http.createServer((q, r) => { const csv = fs.readFileSync("data/customers.csv", "utf8"); console.log("served:\\n" + csv); r.setHeader("content-type", "text/html"); r.end("<title>Export</title><pre>" + csv + "</pre><script>console.log(" + JSON.stringify(csv.split("\\n")[1]) + ")</script>"); });',
+      's.listen(0, "127.0.0.1", () => console.log("Local: http://localhost:" + s.address().port + "/"));', ""].join("\n"));
+
+    const c = new Client({ name: "e2e-redact", version: "1" });
+    await c.connect(new StdioClientTransport({ command: process.execPath, args: [CLI, rDir, "--stdio"], stderr: "ignore" }));
+    const rc = (name, args = {}) => c.callTool({ name, arguments: args });
+    const leaks = (s) => /Alice|Bob Stone|corp\.example|sk_live/.test(s);
+    try {
+      const out = text(await rc("run_command", { command: "node report.mjs" }));
+      assert.ok(!leaks(out), out);
+      assert.match(out, /\[hidden: a line from data\/customers\.csv\]/);
+      assert.match(out, /\[hidden: a line from \.env\]/);
+      assert.match(out, /total: 2 customers/); // the script's own output still comes through
+
+      const srv = json(await rc("start_process", { command: "node server.mjs" }));
+      const page = text(await rc("http_get", { url: srv.url }));
+      assert.ok(!leaks(page), page);
+      const logs = text(await rc("process_output", { id: srv.id }));
+      assert.ok(!leaks(logs), logs);
+      const shot = text(await rc("check_page", { url: srv.url, evaluate: "document.querySelector('pre').textContent" }));
+      assert.ok(!leaks(shot), shot);
+      await rc("stop_process", { id: srv.id });
+    } finally { await c.close(); }
+  });
+
   await t("startup warns which readable files look like real data, and how to hide them", async () => {
     const wDir = fs.mkdtempSync(path.join(os.tmpdir(), "cb-warn-"));
     fs.writeFileSync(path.join(wDir, "export.csv"), "a,b");
