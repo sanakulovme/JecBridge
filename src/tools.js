@@ -5,7 +5,7 @@ import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { VERSION } from "./version.js";
 import { checkPage } from "./browser.js";
-import { discoverSkills, skillFiles, resolveSkillFile, isScript, interpreterFor } from "./skills.js";
+import { discoverSkills, skillFiles, resolveSkillFile, isScript, interpreterFor, scriptTrust, skillTrust } from "./skills.js";
 
 // How the AI must work, the way a coding agent like Claude Code does. Sent as server
 // instructions and repeated in project_info, because some clients ignore instructions.
@@ -19,7 +19,7 @@ export const WORKING_RULES = [
   "Safety rules are not obstacles to work around. If safe mode blocks a command, use an allowed alternative; if there is none, tell the user exactly what they would need to allow.",
 ];
 
-const SAFETY_BLOCK = /Access denied|not in the command allowlist|blocked in safe mode|Safe mode does not allow|read-only mode|points outside the project/;
+const SAFETY_BLOCK = /Access denied|not in the command allowlist|blocked in safe mode|Safe mode does not allow|read-only mode|points outside the project|not trusted|changed since it was trusted/;
 
 const ok = (text) => ({ content: [{ type: "text", text: typeof text === "string" ? text : JSON.stringify(text, null, 2) }] });
 // Every error tells the AI what to do next, so it fixes problems instead of handing them to the user
@@ -416,12 +416,14 @@ export function createServer(ws, log = () => {}) {
     const scripts = files.filter(isScript);
     return ok(`# Skill: ${skill.name} (${skill.source})\n\n${skill.body}\n\n` +
       (files.length ? `---\nFiles in this skill: ${files.join(", ")}\nRead one with use_skill { name: "${skill.name}", file }.` +
-        (scripts.length ? ` Run a script with run_skill_script { name: "${skill.name}", script, args }.` : "") : ""));
+        (scripts.length ? ` Run a script with run_skill_script { name: "${skill.name}", script, args }` +
+          (skillTrust(skill) === "trusted" ? "." : ` once the user trusts them (npx jecbridge skills trust ${skill.name}); until then do the steps without the scripts or ask the user.`) : "") : ""));
   }));
 
   server.registerTool("run_skill_script", {
     title: "Run a skill's script",
     description: "Run a script that ships with a skill (e.g. scripts/check.py) in the project folder. " +
+      "Only scripts the user has trusted run (npx jecbridge skills trust <name>); trust is pinned to the file contents. " +
       "The interpreter (node, python, …) must be on the command allowlist; arguments follow the same rules as run_command.",
     inputSchema: {
       name: z.string().describe("Skill name"),
@@ -434,6 +436,13 @@ export function createServer(ws, log = () => {}) {
   }, mutate("run_skill_script", async ({ name, script, args, cwd, timeout_sec }) => {
     const skill = findSkill(name);
     const abs = resolveSkillFile(skill, script);
+    const rel = path.relative(fs.realpathSync(skill.dir), abs).split(path.sep).join("/");
+    const trust = scriptTrust(skill, rel);
+    if (trust !== "trusted") {
+      throw new Error(trust === "changed"
+        ? `Script "${rel}" of skill "${skill.name}" changed since it was trusted, so it won't run. Ask the user to review it and run: npx jecbridge skills trust ${skill.name}`
+        : `Scripts of skill "${skill.name}" are not trusted yet, so "${rel}" won't run. Ask the user to review them and run: npx jecbridge skills trust ${skill.name}`);
+    }
     const r = await ws.runScript(abs, args, { cwd, timeoutSec: timeout_sec, interpreter: interpreterFor(abs) });
     const next = r.exitCode === 0 ? "" : "\n\nNext: the script failed. Read the output, fix the cause and run it again yourself.";
     return { ...ok(`exit code: ${r.exitCode}\n${r.output || "(no output)"}${next}`), isError: r.exitCode !== 0 };

@@ -12,7 +12,8 @@ import { Workspace, IGNORE_FILE } from "./workspace.js";
 import { createServer } from "./tools.js";
 import { VERSION } from "./version.js";
 import { startTunnel, copyToClipboard } from "./tunnel.js";
-import { discoverSkills, installSkills, removeSkill, userSkillsDir, PROJECT_SKILL_DIRS } from "./skills.js";
+import { discoverSkills, installSkills, removeSkill, userSkillsDir, PROJECT_SKILL_DIRS,
+  scriptHashes, skillTrust, trustSkill, untrustSkill, readSkill } from "./skills.js";
 
 const HELP = `
 JecBridge — connect a local project to any AI over MCP
@@ -28,8 +29,10 @@ Quick start (claude.ai, ChatGPT, Gemini):
 Skills (SKILL.md, same format as Claude Code):
   jecbridge skills list                    skills the AI can use here
   jecbridge skills add <source>            from GitHub (owner/repo/path or URL) or a folder
+  jecbridge skills trust <name>            let the AI run the skill's scripts (pinned to their contents)
+  jecbridge skills untrust <name>
   jecbridge skills remove <name>
-  add --project to install into this project's .claude/skills
+  add --project to install into this project's .claude/skills, --trust to trust scripts on add
 
 Options:
   --stdio                 stdio transport (Claude Desktop, Cursor, Claude Code)
@@ -93,36 +96,88 @@ if (process.argv[2] === "skills") { await skillsCommand(process.argv.slice(3)); 
 
 // jecbridge skills [list | add <source> | remove <name>] [--project]
 async function skillsCommand([sub = "list", ...rest]) {
-  const project = rest.includes("--project");
-  const args = rest.filter((a) => a !== "--project");
+  const flags = new Set(rest.filter((a) => a.startsWith("--")));
+  const args = rest.filter((a) => !a.startsWith("--"));
+  const project = flags.has("--project");
   const dest = project ? path.resolve(PROJECT_SKILL_DIRS[0]) : userSkillsDir();
   const where = project ? `this project (${PROJECT_SKILL_DIRS[0]})` : `your skills folder (${userSkillsDir()})`;
+  const TRUST_LABEL = { none: "no scripts", trusted: "scripts trusted", untrusted: "scripts NOT trusted", changed: "scripts CHANGED" };
+  const find = (name) => {
+    const s = discoverSkills(process.cwd()).find((x) => x.name.toLowerCase() === String(name).toLowerCase());
+    if (!s) throw new Error(`no skill "${name}" here. See: jecbridge skills list`);
+    return s;
+  };
+  // Show what would run, then ask (or take --yes). Without a terminal the answer is no.
+  const showScripts = (skill) => {
+    console.log(`\nScripts in ${skill.name} (${skill.dir}):`);
+    for (const [f, h] of Object.entries(scriptHashes(skill))) {
+      console.log(`  ${f.padEnd(40)} ${String(fs.statSync(path.join(skill.dir, f)).size).padStart(7)} bytes  sha256 ${h.slice(0, 12)}`);
+    }
+  };
+  const confirmTrust = async (skill) => {
+    showScripts(skill);
+    console.log("Trusting lets the AI run these files with run_skill_script. Review them first if the skill isn't yours.");
+    if (flags.has("--yes")) return true;
+    if (!process.stdin.isTTY) { console.log("No terminal to confirm in: not trusted. Re-run with --yes to trust."); return false; }
+    const { createInterface } = await import("node:readline/promises");
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    const answer = (await rl.question(`Trust the scripts of ${skill.name}? [y/N] `)).trim().toLowerCase();
+    rl.close();
+    return answer === "y" || answer === "yes";
+  };
   try {
     if (sub === "list") {
       const skills = discoverSkills(process.cwd());
       if (!skills.length) return console.log("No skills yet. Add one: jecbridge skills add <github owner/repo/path | folder>");
       console.log(`Skills the AI can use in ${process.cwd()}:\n`);
-      for (const s of skills) console.log(`  ${s.name.padEnd(24)} ${`[${s.source}]`.padEnd(12)} ${s.description.slice(0, 90)}${s.description.length > 90 ? "…" : ""}`);
+      for (const s of skills) {
+        console.log(`  ${s.name.padEnd(24)} ${`[${s.source}]`.padEnd(12)} ${TRUST_LABEL[skillTrust(s)].padEnd(20)} ${s.description.slice(0, 70)}${s.description.length > 70 ? "…" : ""}`);
+      }
       return;
     }
     if (sub === "add") {
-      if (!args[0]) throw new Error("usage: jecbridge skills add <github owner/repo/path | https://github.com/... | folder> [--project]");
+      if (!args[0]) throw new Error("usage: jecbridge skills add <github owner/repo/path | https://github.com/... | folder> [--project] [--trust]");
+      if (flags.has("--trust")) flags.add("--yes");
       const installed = await installSkills(args[0], { destRoot: dest, log: (m) => console.log(m) });
       if (!installed.length) throw new Error("nothing was installed");
       for (const s of installed) {
         console.log(`\n+ ${s.updated ? "updated" : "installed"} ${s.name}: ${s.description.slice(0, 120)}${s.description.length > 120 ? "…" : ""}`);
         console.log(`  ${s.files} file(s) in ${s.dir}`);
-        if (s.scripts.length) console.log(`  Scripts: ${s.scripts.join(", ")} (they run only when the AI calls run_skill_script, under your command allowlist)`);
+        if (!s.scripts.length) continue;
+        const skill = readSkill(s.dir, project ? "project" : "user"); // the copy just installed, not a same-named one elsewhere
+        if (skillTrust(skill) === "trusted") { console.log("  Scripts unchanged and already trusted."); continue; }
+        if ((flags.has("--trust") || process.stdin.isTTY) && await confirmTrust(skill)) {
+          trustSkill(skill);
+          console.log(`  Scripts trusted: the AI can run them.`);
+        } else {
+          if (!flags.has("--trust") && !process.stdin.isTTY) showScripts(skill);
+          console.log(`  Scripts are NOT trusted: the AI can read this skill but can't run its scripts. Trust later: jecbridge skills trust ${s.name}`);
+        }
       }
       console.log(`\nInstalled into ${where}. A skill is instructions for the AI: only install skills from sources you trust.`);
       return;
     }
+    if (sub === "trust") {
+      if (!args[0]) throw new Error("usage: jecbridge skills trust <name> [--yes]");
+      const skill = find(args[0]);
+      if (skillTrust(skill) === "none") return console.log(`${skill.name} has no scripts; nothing to trust.`);
+      if (!(await confirmTrust(skill))) return console.log("Not trusted.");
+      trustSkill(skill);
+      return console.log(`Trusted ${skill.name}. If any of its scripts change, they'll need to be trusted again.`);
+    }
+    if (sub === "untrust") {
+      if (!args[0]) throw new Error("usage: jecbridge skills untrust <name>");
+      const skill = find(args[0]);
+      return console.log(untrustSkill(skill) ? `${skill.name}'s scripts are no longer trusted.` : `${skill.name} wasn't trusted.`);
+    }
     if (sub === "remove") {
       if (!args[0]) throw new Error("usage: jecbridge skills remove <name> [--project]");
+      const skill = discoverSkills(process.cwd()).find((x) => x.name.toLowerCase() === args[0].toLowerCase() && x.dir.startsWith(dest));
+      if (skill) untrustSkill(skill);
       if (!removeSkill(args[0], dest)) throw new Error(`no skill "${args[0]}" in ${where}`);
       return console.log(`Removed ${args[0]} from ${where}.`);
     }
-    throw new Error(`unknown command "skills ${sub}". Use: skills list | skills add <source> | skills remove <name>`);
+    throw new Error(`unknown command "skills ${sub}". Use: skills list | add <source> | trust <name> | untrust <name> | remove <name>`);
   } catch (e) {
     console.error(`Error: ${e.message}`);
     process.exit(1);

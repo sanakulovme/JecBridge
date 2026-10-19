@@ -185,6 +185,7 @@ npx jecbridge skills add anthropics/skills/skills/webapp-testing
 npx jecbridge skills add https://github.com/owner/repo/tree/main/skills/my-skill
 npx jecbridge skills add ./my-skill                         # from a folder
 npx jecbridge skills add ./my-skill --project               # into this project's .claude/skills
+npx jecbridge skills trust webapp-testing                   # let the AI run its scripts
 npx jecbridge skills remove webapp-testing
 ```
 
@@ -206,7 +207,9 @@ description: Our colors, fonts and component rules. Use when building or restyli
 Use #2563EB as the primary color and Inter for text. Buttons are 40px tall with 8px corners.
 ```
 
-> A skill is instructions for the AI, so treat it like code: install skills only from sources you trust. Skill scripts run only through `run_skill_script`, their interpreter must be on the command allowlist, and their arguments stay inside the project.
+**Skill scripts are off until you trust them.** The AI can read any installed skill, but it can run a skill's scripts only after you approve them with `jecbridge skills trust <name>` (or `skills add … --trust`). You see every script with its size and hash first. Trust is pinned to each file's SHA-256, so if a skill is updated or a script changes, it is blocked until you trust it again. `skills list` shows the state of each skill: no scripts, trusted, NOT trusted or CHANGED. This applies to project skills in a cloned repo too.
+
+> A skill is instructions for the AI, so treat it like code: install skills only from sources you trust. Trusted scripts still run only through `run_skill_script`, their interpreter must be on the command allowlist, and their arguments stay inside the project.
 
 ## What the AI sees, and where it goes
 

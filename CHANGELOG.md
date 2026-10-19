@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.9.0 — 2026-10-19
+
+Skill scripts need your approval, raised by the AI Automation Society community: with skills pulled in from other repos, the AI shouldn't run their scripts on its own.
+
+- A skill's scripts run only after `jecbridge skills trust <name>` (or `skills add … --trust`), which first lists every script with its size and SHA-256
+- Trust is pinned to the hashes: an updated skill or a changed script is blocked until it is trusted again
+- `skills add` asks in a terminal and defaults to no; without a terminal nothing is trusted. `skills untrust` takes it back, `skills remove` drops the trust entry
+- `skills list` shows each skill's script state; `use_skill` and `run_skill_script` tell the AI exactly what the user has to run
+- Applies to project skills in a cloned repo too; built-in skills are trusted
+
 ## 0.8.0 — 2026-10-19
 
 Indirect reads, raised by the AI Automation Society community: the ignore list stops the tools, but a script the AI runs can still read a hidden file.

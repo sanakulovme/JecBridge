@@ -185,6 +185,7 @@ npx jecbridge skills add anthropics/skills/skills/webapp-testing
 npx jecbridge skills add https://github.com/owner/repo/tree/main/skills/my-skill
 npx jecbridge skills add ./my-skill                         # papkadan
 npx jecbridge skills add ./my-skill --project               # shu loyihaning .claude/skills papkasiga
+npx jecbridge skills trust webapp-testing                   # AI uning skriptlarini ishga tushira olsin
 npx jecbridge skills remove webapp-testing
 ```
 
@@ -206,7 +207,9 @@ description: Our colors, fonts and component rules. Use when building or restyli
 Use #2563EB as the primary color and Inter for text. Buttons are 40px tall with 8px corners.
 ```
 
-> Skill — bu AI'ga berilgan ko'rsatma, shuning uchun unga kodga qaragandek qarang: faqat ishonchli manbalardan o'rnating. Skill skriptlari faqat `run_skill_script` orqali ishga tushadi. Ularning interpretatori buyruqlar allowlist'ida bo'lishi kerak, argumentlari esa loyiha papkasidan chiqa olmaydi.
+**Skill skriptlari siz tasdiqlamaguningizcha o'chiq.** AI o'rnatilgan istalgan skill'ni o'qiy oladi, lekin uning skriptlarini faqat siz `jecbridge skills trust <nom>` (yoki `skills add … --trust`) bilan ruxsat berganingizdan keyin ishga tushira oladi. Undan oldin har bir skript hajmi va hash'i bilan ko'rsatiladi. Ruxsat har bir faylning SHA-256 hash'iga bog'lanadi: skill yangilansa yoki skript o'zgarsa, siz qayta tasdiqlamaguningizcha u bloklanadi. `skills list` har bir skill holatini ko'rsatadi: skriptsiz, tasdiqlangan, tasdiqlanmagan yoki O'ZGARGAN. Bu klon qilingan repodagi loyiha skill'lariga ham tegishli.
+
+> Skill — bu AI'ga berilgan ko'rsatma, shuning uchun unga kodga qaragandek qarang: faqat ishonchli manbalardan o'rnating. Tasdiqlangan skriptlar ham faqat `run_skill_script` orqali ishga tushadi, ularning interpretatori buyruqlar allowlist'ida bo'lishi kerak, argumentlari esa loyiha papkasidan chiqa olmaydi.
 
 ## AI nimani ko'radi va u qayerga ketadi
 

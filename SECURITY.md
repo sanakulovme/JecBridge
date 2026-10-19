@@ -16,6 +16,7 @@ Include steps to reproduce, the JecBridge version, your OS, and the impact (for 
 - Using an allowlisted command's arguments to reach files outside the project or protected files
 - Leaking credential-like environment variables to commands in default mode
 - Reaching the HTTP endpoint without a valid token
+- Running a skill script that the user has not trusted, or that changed after it was trusted
 
 ## Known limitations (by design)
 

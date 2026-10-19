@@ -3,6 +3,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { spawnSync, execFileSync } from "node:child_process";
 import { Readable } from "node:stream";
@@ -188,6 +189,55 @@ export function removeSkill(name, destRoot = userSkillsDir()) {
   if (!fs.existsSync(path.join(dir, "SKILL.md"))) return false;
   fs.rmSync(dir, { recursive: true, force: true });
   return true;
+}
+
+// ---------- script trust ----------
+// A skill's scripts run only after the user trusted them with `jecbridge skills trust <name>`.
+// Trust is pinned to each script's SHA-256, so an updated or swapped file has to be approved again.
+// Built-in skills ship with JecBridge itself and are trusted.
+
+const trustFile = () => path.join(jbHome(), "skills-trust.json");
+const sha256 = (file) => crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+const trustKey = (skill) => fs.realpathSync(skill.dir);
+
+function readTrust() {
+  try { return JSON.parse(fs.readFileSync(trustFile(), "utf8")); } catch { return {}; }
+}
+
+export function scriptHashes(skill) {
+  return Object.fromEntries(skillFiles(skill).filter(isScript).map((f) => [f, sha256(path.join(skill.dir, f))]));
+}
+
+// "trusted", "untrusted" or "changed" for one script (rel path inside the skill)
+export function scriptTrust(skill, rel) {
+  if (skill.source === "built-in") return "trusted";
+  const entry = readTrust()[trustKey(skill)];
+  if (!entry || !(rel in entry.scripts)) return "untrusted";
+  return entry.scripts[rel] === sha256(path.join(skill.dir, rel)) ? "trusted" : "changed";
+}
+
+// Summary for a whole skill: "none" (no scripts), "trusted", "untrusted" or "changed"
+export function skillTrust(skill) {
+  const scripts = skillFiles(skill).filter(isScript);
+  if (!scripts.length) return "none";
+  const states = scripts.map((s) => scriptTrust(skill, s));
+  if (states.every((s) => s === "trusted")) return "trusted";
+  return states.includes("changed") ? "changed" : "untrusted";
+}
+
+export function trustSkill(skill) {
+  const all = readTrust();
+  all[trustKey(skill)] = { name: skill.name, scripts: scriptHashes(skill), trustedAt: new Date().toISOString() };
+  fs.mkdirSync(jbHome(), { recursive: true });
+  fs.writeFileSync(trustFile(), JSON.stringify(all, null, 2));
+}
+
+export function untrustSkill(skill) {
+  const all = readTrust();
+  const had = trustKey(skill) in all;
+  delete all[trustKey(skill)];
+  if (had) fs.writeFileSync(trustFile(), JSON.stringify(all, null, 2));
+  return had;
 }
 
 // Script runner for a skill file: the interpreter must still be on the command allowlist

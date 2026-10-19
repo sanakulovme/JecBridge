@@ -574,7 +574,10 @@ try {
     const add = spawnSync(process.execPath, [CLI, "skills", "add", src], { env, encoding: "utf8" });
     assert.equal(add.status, 0, add.stderr);
     assert.match(add.stdout, /\+ installed hello: Greet people politely/);
-    assert.match(add.stdout, /Scripts: scripts\/greet\.mjs/);
+    assert.match(add.stdout, /Scripts in hello[\s\S]*scripts\/greet\.mjs[\s\S]*sha256 [0-9a-f]{12}/);
+    // No terminal to confirm in, so the scripts are installed but not trusted
+    assert.match(add.stdout, /Scripts are NOT trusted[\s\S]*jecbridge skills trust hello/);
+    const cli = (...a) => spawnSync(process.execPath, [CLI, "skills", ...a], { env, cwd: os.tmpdir(), encoding: "utf8" });
 
     // The project overrides a built-in skill with its own version
     const proj = fs.mkdtempSync(path.join(os.tmpdir(), "cb-skproj-"));
@@ -601,8 +604,35 @@ try {
       const missing = await sk("use_skill", { name: "nope" });
       assert.ok(missing.isError && /Available: .*hello/.test(text(missing)));
 
+      // Untrusted scripts don't run, and the AI is told exactly what the user has to do
+      assert.match(used, /once the user trusts them \(npx jecbridge skills trust hello\)/);
+      const blocked = await sk("run_skill_script", { name: "hello", script: "scripts/greet.mjs", args: ["world"] });
+      assert.ok(blocked.isError && /not trusted yet[\s\S]*npx jecbridge skills trust hello/.test(text(blocked)), text(blocked));
+      assert.match(text(blocked), /safety rule, not a bug/);
+      assert.match(cli("list").stdout, /hello +\[user\] +scripts NOT trusted/);
+
+      // The user trusts them: now they run
+      const trusted = cli("trust", "hello", "--yes");
+      assert.equal(trusted.status, 0, trusted.stderr); assert.match(trusted.stdout, /Trusted hello/);
+      assert.match(cli("list").stdout, /hello +\[user\] +scripts trusted/);
       const ran = await sk("run_skill_script", { name: "hello", script: "scripts/greet.mjs", args: ["world"] });
       assert.ok(!ran.isError, text(ran)); assert.match(text(ran), new RegExp(`hello world from ${path.basename(proj)}`));
+
+      // A script that changes after it was trusted is blocked until it is trusted again
+      const installedScript = path.join(home, "skills/hello/scripts/greet.mjs");
+      fs.appendFileSync(installedScript, 'console.log("sneaky");\n');
+      const changed = await sk("run_skill_script", { name: "hello", script: "scripts/greet.mjs", args: ["world"] });
+      assert.ok(changed.isError && /changed since it was trusted/.test(text(changed)), text(changed));
+      assert.match(cli("list").stdout, /hello +\[user\] +scripts CHANGED/);
+      assert.match(cli("trust", "hello").stdout, /Not trusted/); // no terminal and no --yes: nothing is trusted
+      assert.ok((await sk("run_skill_script", { name: "hello", script: "scripts/greet.mjs", args: ["world"] })).isError);
+      cli("trust", "hello", "--yes");
+      assert.match(text(await sk("run_skill_script", { name: "hello", script: "scripts/greet.mjs", args: ["world"] })), /sneaky/);
+
+      // untrust takes it back
+      assert.match(cli("untrust", "hello").stdout, /no longer trusted/);
+      assert.ok((await sk("run_skill_script", { name: "hello", script: "scripts/greet.mjs", args: ["world"] })).isError);
+      cli("trust", "hello", "--yes");
       assert.ok((await sk("run_skill_script", { name: "hello", script: "scripts/greet.mjs", args: ["../outside.txt"] })).isError);
       assert.ok((await sk("run_skill_script", { name: "hello", script: "ref/notes.md" })).isError);
 
@@ -610,10 +640,22 @@ try {
       assert.ok(prompts.some((p) => p.name === "skill-hello" && p.description === "Greet people politely"));
     } finally { await c.close(); }
 
+    // Re-adding brings back the original script: it differs from the trusted (edited) one, so trust is gone again.
+    // Re-adding the same, unchanged skill keeps its trust; --trust trusts on install without a prompt
+    assert.match(cli("add", src).stdout, /Scripts are NOT trusted/);
+    cli("trust", "hello", "--yes");
+    assert.match(cli("add", src).stdout, /Scripts unchanged and already trusted/);
+    const src2 = fs.mkdtempSync(path.join(os.tmpdir(), "cb-sksrc2-"));
+    fs.cpSync(path.join(src, "hello"), path.join(src2, "hello2"), { recursive: true });
+    fs.writeFileSync(path.join(src2, "hello2/SKILL.md"), "---\nname: hello2\ndescription: Second greeter\n---\nHi.\n");
+    assert.match(cli("add", src2, "--trust").stdout, /Scripts trusted: the AI can run them/);
+    assert.match(cli("list").stdout, /hello2 +\[user\] +scripts trusted/);
+
     const rm = spawnSync(process.execPath, [CLI, "skills", "remove", "hello"], { env, encoding: "utf8" });
     assert.equal(rm.status, 0, rm.stderr);
+    assert.ok(!fs.readFileSync(path.join(home, "skills-trust.json"), "utf8").includes(`"name": "hello"`), "trust entry should go with the skill");
     const list = spawnSync(process.execPath, [CLI, "skills", "list"], { env, cwd: proj, encoding: "utf8" }).stdout;
-    assert.ok(!list.includes("hello") && /static-site +\[project\]/.test(list), list);
+    assert.ok(!/^\s+hello\s/m.test(list) && /static-site +\[project\]/.test(list), list);
   });
 
   await t("--new-token replaces the saved token", async () => {
