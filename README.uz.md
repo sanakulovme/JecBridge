@@ -18,6 +18,8 @@ Faqat [Node.js 22+](https://nodejs.org) kerak. Keyin bitta qator:
 npx jecbridge my-app --tunnel
 ```
 
+> 🔒 **Tunnelga kim ulana oladi:** faqat to'liq URL'ga ega odam. URL ichida tasodifiy 192-bitli maxfiy token bor. Kimda bu URL bo'lsa, o'sha AI'ingiz bilan bir xil huquqqa ega bo'ladi, shuning uchun uni paroldek saqlang. Tarqalib ketsa, `--new-token` bilan qayta ishga tushiring. [Batafsil](#tunnel-url-xavfsizligi)
+
 Tamom. Papka yo'q bo'lsa o'zi yaratiladi, tunnel dasturi (cloudflared) birinchi marta avtomatik yuklab olinadi, connector URL'i esa clipboard'ga nusxalanadi. Uni AI'ga qo'ying:
 
 - **claude.ai:** Settings → Connectors → *Add custom connector*

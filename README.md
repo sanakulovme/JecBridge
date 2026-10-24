@@ -18,6 +18,8 @@ The only requirement is [Node.js 22+](https://nodejs.org). Then one line:
 npx jecbridge my-app --tunnel
 ```
 
+> 🔒 **Who can reach the tunnel:** only someone with the full URL, which carries a random 192-bit secret token. Anyone who has it gets the same access as your AI, so treat it like a password. Leaked? Restart with `--new-token`. [More](#tunnel-url-security)
+
 That's it. The folder is created if it doesn't exist, the tunnel tool (cloudflared) is downloaded automatically the first time, and the connector URL is copied to your clipboard. Paste it into your AI:
 
 - **claude.ai:** Settings → Connectors → *Add custom connector*
