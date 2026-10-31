@@ -102,7 +102,7 @@ const DEFAULT_ALLOWED = [
   "npm", "npx", "pnpm", "yarn", "bun", "node", "deno", "tsc",
   "python", "python3", "pip", "pip3", "pytest", "uv",
   "go", "cargo", "rustc", "dotnet", "java", "javac", "mvn", "gradle",
-  "make", "php", "composer", "ruby", "bundle",
+  "make", "php", "composer", "ruby", "bundle", "winget", "ffmpeg", "ffprobe",
   "ls", "cat", "echo", "pwd", "dir", "type", "where", "git", "eslint", "prettier", "jest", "vitest",
 ];
 
