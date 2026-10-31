@@ -254,12 +254,12 @@ For client work, prefer a copy of the repo without real data, or a provider and 
 
 - **Folder jail.** `../`, absolute paths and symlinks can't escape the project. Every path is resolved with `realpath` before the check, so a symlink to `~/.ssh` is rejected by file tools, search, `project_info` and command arguments alike.
 - **Secrets are hidden.** `.env*`, `.git/`, `*.pem`, `*.key` and SSH keys can't be read, written or found by search.
-- **Command allowlist.** By default only `npm`, `node`, `python`, `pytest`, `go`, `cargo`… are allowed. Chaining with `&&`, `|`, `;`, `$(`, plus `git push` and `git -C` / `--git-dir`, is blocked.
+- **Command allowlist.** By default, common development tools are allowed, including `npm`, `node`, `python`, `go`, `cargo`, `winget`, `ffmpeg` and `ffprobe`. Chaining with `&&`, `|`, `;`, `$(`, plus `git push` and `git -C` / `--git-dir`, is blocked.
   - Command arguments are checked too: `cat .env`, `cat ../file`, `ls /` and `--prefix=..` are rejected.
   - Environment variables whose names contain `TOKEN`, `SECRET`, `PASSWORD`, `API_KEY` or `AUTH` are not passed to commands.
   - No shell is used: `%VAR%` isn't expanded on Windows, and arguments with spaces stay intact.
   - On timeout the command is stopped together with all its child processes.
-  - Change the list: `--allow npm,node,python`
+  - Replace the default list: `--allow npm,node,python` (this replaces the defaults; it does not add to them).
   - Allow everything: `--allow-all-commands`. Only on your own machine and with an AI you trust.
 - **Separate checkpoints.** Stored in `.jecbridge/shadow.git`. Your own `.git` history is never touched.
 - **Token.** A random 192-bit token is required on every HTTP request, in the URL or as `Authorization: Bearer`. Wrong tokens are logged with the caller's IP; after 20 failures in 10 minutes that caller is blocked.

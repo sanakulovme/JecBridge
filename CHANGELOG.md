@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.2 — 2026-10-31
+
+- Documented the expanded default command allowlist in English and Uzbek, including that `--allow` replaces (rather than extends) the defaults.
+- Added an end-to-end regression check for `winget`, `ffmpeg` and `ffprobe` in the default allowlist.
+
+## 0.9.1 — 2026-10-31
+
+- Added `winget`, `ffmpeg` and `ffprobe` to the default command allowlist, so Windows package installation and media probing/rendering tools can be run in safe mode.
+
 ## 0.9.0 — 2026-10-19
 
 Skill scripts need your approval, raised by the AI Automation Society community: with skills pulled in from other repos, the AI shouldn't run their scripts on its own.

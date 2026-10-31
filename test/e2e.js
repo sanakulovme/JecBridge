@@ -72,8 +72,12 @@ try {
     assert.equal(tools.length, 21, tools.map((x) => x.name).join(", "));
   });
 
-  await t("detects an empty project", async () => {
-    assert.match(text(await call("project_info")), /"empty": true/);
+  await t("detects an empty project and reports the default command allowlist", async () => {
+    const info = json(await call("project_info"));
+    assert.equal(info.empty, true);
+    for (const command of ["winget", "ffmpeg", "ffprobe"]) {
+      assert.ok(info.mode.commands.includes(command), `${command} missing from default allowlist: ${info.mode.commands.join(", ")}`);
+    }
   });
 
   await t("the AI is told to work like Claude Code (instructions and project_info)", async () => {

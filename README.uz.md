@@ -254,12 +254,12 @@ Mijoz loyihalarida haqiqiy ma'lumotlarsiz nusxa bilan ishlang yoki ma'lumot sozl
 
 - **Papka qamog'i.** `../`, absolyut yo'llar va symlink orqali loyihadan tashqariga chiqib bo'lmaydi. Har bir yo'l tekshiruvdan oldin `realpath` bilan hal qilinadi. Shuning uchun `~/.ssh` ga ishora qiluvchi symlink fayl tool'lari, qidiruv, `project_info` va buyruq argumentlarida bir xilda rad etiladi.
 - **Maxfiy fayllar yopiq.** `.env*`, `.git/`, `*.pem`, `*.key`, SSH kalitlar o'qilmaydi, yozilmaydi va qidiruvda ko'rinmaydi.
-- **Buyruqlar allowlist'da.** Standart holatda faqat `npm`, `node`, `python`, `pytest`, `go`, `cargo`… ruxsat etilgan. `&&`, `|`, `;`, `$(` zanjirlari, `git push` va `git -C` / `--git-dir` bloklangan.
+- **Buyruqlar allowlist'da.** Standart holatda `npm`, `node`, `python`, `go`, `cargo`, `winget`, `ffmpeg` va `ffprobe` kabi asosiy dasturlarga ruxsat berilgan. `&&`, `|`, `;`, `$(` zanjirlari, `git push` va `git -C` / `--git-dir` bloklangan.
   - Buyruq argumentlari ham tekshiriladi: `cat .env`, `cat ../fayl`, `ls /`, `--prefix=..` ishlamaydi.
   - Nomida `TOKEN`, `SECRET`, `PASSWORD`, `API_KEY`, `AUTH` bor environment o'zgaruvchilari buyruqlarga uzatilmaydi.
   - Shell ishlatilmaydi, Windows'da ham `%VAR%` kengaymaydi va bo'sh joyli argumentlar buzilmaydi.
   - Timeout bo'lganda buyruq barcha bolalar jarayonlari bilan birga to'xtatiladi.
-  - Ro'yxatni o'zgartirish: `--allow npm,node,python`
+  - Standart ro'yxatni almashtirish: `--allow npm,node,python` (bu standart ro'yxatga qo'shmaydi, uning o'rniga yangi ro'yxatni belgilaydi).
   - Hammasiga ruxsat: `--allow-all-commands`. Faqat o'zingizga tegishli mashinada va ishonchli AI bilan ishlating.
 - **Checkpointlar alohida.** Ular `.jecbridge/shadow.git` ichida saqlanadi. Sizning `.git` tarixingizga tegilmaydi.
 - **Token.** Har bir HTTP so'rov uchun tasodifiy 192-bitli token majburiy: URL ichida yoki `Authorization: Bearer`. Noto'g'ri token bilan kelgan so'rovlar yuboruvchining IP manzili bilan logga yoziladi. 10 daqiqada 20 marta xato qilgan manzil bloklanadi.
